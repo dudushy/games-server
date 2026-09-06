@@ -10,6 +10,13 @@ if (($#)); then
   exec "${MANAGER[@]}" "$@"
 fi
 
+# A partir daqui o script é uma TUI interativa. Sob 'set -e', qualquer comando que
+# retorne código != 0 (um sudo cancelado, um systemctl sem unidade, um curl de teste
+# que falha, um grep sem correspondência) encerraria o menu inteiro. Isso é indesejado
+# numa interface interativa, então desativamos o errexit aqui. Mantemos 'nounset' e
+# 'pipefail'. Cada ação trata seus próprios erros e exibe mensagens ao usuário.
+set +e
+
 # Cores só quando a saída é um terminal; caso contrário, strings vazias.
 if [[ -t 1 ]]; then
   BOLD=$'\e[1m'; DIM=$'\e[2m'; RESET=$'\e[0m'
@@ -353,17 +360,19 @@ NGINX
   # 3b) Checar se o domínio chega neste servidor pela porta 80 (evita certbot cego).
   printf '\n%sVerificando acessibilidade do domínio na porta 80...%s\n' "$DIM" "$RESET"
   local token="acme-precheck-$$"
-  echo "$token" | sudo tee "$webroot/.well-known/acme-challenge/$token" >/dev/null
-  local got
-  got="$(curl -fsS -m 10 "http://$domain/.well-known/acme-challenge/$token" 2>/dev/null)"
-  run_sudo rm -f "$webroot/.well-known/acme-challenge/$token"
+  echo "$token" | sudo tee "$webroot/.well-known/acme-challenge/$token" >/dev/null || true
+  local got=""
+  # 'curl -f' sai com código != 0 em erro HTTP/conexão; sob 'set -e' isso encerraria
+  # o script. O '|| true' garante que a checagem nunca derrube o menu.
+  got="$(curl -fsS -m 10 "http://$domain/.well-known/acme-challenge/$token" 2>/dev/null || true)"
+  run_sudo rm -f "$webroot/.well-known/acme-challenge/$token" || true
   if [[ "$got" != "$token" ]]; then
     printf '%s✗ O domínio NÃO respondeu com o conteúdo esperado na porta 80.%s\n' "$RED" "$RESET"
     printf 'Isso significa que a porta 80 externa não chega a este servidor (%s).\n' "${lan:-?}"
     printf 'Causa comum: outra regra de port forwarding usa a porta 80 para outro IP,\n'
     printf 'ou o DNS ainda não propagou. Ajuste e rode a opção novamente.\n'
     printf '%sNão vou chamar o certbot para não gastar tentativas de emissão.%s\n' "$YELLOW" "$RESET"
-    pause; return
+    pause; return 0
   fi
   printf '%s✔ Porta 80 chega a este servidor. Emitindo certificado...%s\n' "$GREEN" "$RESET"
 

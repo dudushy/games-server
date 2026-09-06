@@ -68,6 +68,10 @@ Se não houver bloqueio de segurança, tenta iniciá-lo novamente. Uma tentativa
 que falha durante a inicialização cria um bloqueio para evitar repetição contínua.
 Processo travado ainda vivo não é reiniciado automaticamente.
 
+A forma mais simples de instalar, habilitar (com linger), parar, ver status e logs
+dos serviços é pelo menu, em **"Site e serviços"** (`./start_server.sh` → opção 9).
+Os passos manuais abaixo são equivalentes.
+
 Com as instalações antigas já migradas/desabilitadas:
 
 ```bash

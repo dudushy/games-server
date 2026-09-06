@@ -5,6 +5,27 @@ ativo. O servidor HTTP aceita apenas leitura de três rotas: `/`, `/status.js` e
 `/api/status`. Não serve diretórios do disco, senhas, comandos RCON ou logs.
 Por ser só-leitura e não expor dados privados, publicá-lo é seguro.
 
+## Pelo menu (recomendado)
+
+Tudo o que este documento descreve pode ser feito pelo menu principal, em
+**"Site e serviços"** (`./start_server.sh` → opção 9):
+
+- **Gerar/instalar serviços systemd** — cria as unidades do gerenciador e do site,
+  perguntando o bind (`127.0.0.1` ou `0.0.0.0`) e a porta.
+- **Habilitar e iniciar (com linger)** — roda `sudo loginctl enable-linger` e
+  `systemctl --user enable --now`.
+- **Parar / Desabilitar / Status / Logs** dos serviços.
+- **Testar o site agora** — sobe o site em primeiro plano (Ctrl+C encerra).
+- **Publicar o site** — dois caminhos:
+  - **Público (HTTPS)**: instala Nginx + Certbot, cria o proxy reverso para
+    `127.0.0.1:8080`, emite o certificado e, ao final, mostra o registro DNS e o
+    port forwarding (portas 80 e 443) que você precisa configurar fora do servidor,
+    detectando os IPs público e da LAN automaticamente.
+  - **LAN (HTTP)**: publica o site em `0.0.0.0` na porta escolhida e mostra o
+    endereço `http://<ip-da-lan>:<porta>` para acesso interno.
+
+As seções abaixo documentam os mesmos passos manualmente, caso você prefira.
+
 ## Teste local
 
 ```bash

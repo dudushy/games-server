@@ -127,6 +127,250 @@ add_game_flow() {
   pause
 }
 
+# ─────────────────────────── Site e serviços ───────────────────────────
+
+# Nomes fixos usados pelo instalador de unidades e pela config do Nginx.
+NGINX_SITE_NAME="games-status"
+
+# Confirma uma ação com o usuário (retorna 0 se sim).
+confirm() {
+  local answer
+  read -r -p "$1 [s/N]: " answer || return 1
+  [[ "${answer,,}" == "s" ]]
+}
+
+# Detecta o IP da LAN (rota padrão) e o IP público (via serviço externo).
+lan_ip() {
+  ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'
+}
+public_ip() {
+  # Tenta alguns serviços; silencioso em falha (o usuário pode informar à mão).
+  curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
+    || true
+}
+
+# Executa um comando com sudo, mostrando-o antes.
+run_sudo() {
+  printf '%s$ sudo %s%s\n' "$DIM" "$*" "$RESET"
+  sudo "$@"
+}
+
+svc_install() {
+  local bind port
+  printf '\n%sGerar unidades systemd (gerenciador + site).%s\n' "$BOLD" "$RESET"
+  printf 'Bind do site: 1) 127.0.0.1 (padrão, atrás de proxy)  2) 0.0.0.0 (exposição direta)\n'
+  read -r -p 'Opção [1]: ' b || return
+  case "$b" in 2) bind="0.0.0.0" ;; *) bind="127.0.0.1" ;; esac
+  read -r -p 'Porta do site [8080]: ' port || return
+  [[ "$port" =~ ^[0-9]+$ ]] || port=8080
+  local units="$HOME/.config/systemd/user"
+  if [[ -e "$units/games-server.service" || -e "$units/games-status.service" ]]; then
+    printf '%sUnidades já existem.%s\n' "$YELLOW" "$RESET"
+    if confirm 'Regenerar (remove e recria as unidades)?'; then
+      systemctl --user stop games-server.service games-status.service 2>/dev/null || true
+      rm -f "$units/games-server.service" "$units/games-status.service"
+      systemctl --user daemon-reload 2>/dev/null || true
+    else
+      pause; return
+    fi
+  fi
+  STATUS_BIND="$bind" STATUS_PORT="$port" bash "$SCRIPT_DIR/install_systemd.sh" \
+    || printf '%sFalha ao gerar unidades.%s\n' "$RED" "$RESET"
+  pause
+}
+
+svc_enable() {
+  printf '\n%sHabilitar e iniciar os serviços (com linger).%s\n' "$BOLD" "$RESET"
+  printf '%sO linger mantém os serviços após você sair do SSH; exige sudo.%s\n' "$DIM" "$RESET"
+  run_sudo loginctl enable-linger "$(whoami)" \
+    || { printf '%sNão foi possível habilitar o linger.%s\n' "$RED" "$RESET"; pause; return; }
+  systemctl --user enable --now games-server.service games-status.service \
+    && printf '%sServiços habilitados e iniciados.%s\n' "$GREEN" "$RESET" \
+    || printf '%sFalha ao habilitar/iniciar; confira o status.%s\n' "$RED" "$RESET"
+  pause
+}
+
+svc_stop() {
+  systemctl --user stop games-server.service games-status.service \
+    && printf '%sServiços parados (seleção de jogo preservada).%s\n' "$GREEN" "$RESET" \
+    || printf '%sFalha ao parar.%s\n' "$RED" "$RESET"
+  pause
+}
+
+svc_disable() {
+  systemctl --user disable --now games-server.service games-status.service \
+    && printf '%sServiços desabilitados.%s\n' "$GREEN" "$RESET" \
+    || printf '%sFalha ao desabilitar.%s\n' "$RED" "$RESET"
+  pause
+}
+
+svc_status() {
+  printf '\n%s── games-server ──%s\n' "$CYAN" "$RESET"
+  systemctl --user --no-pager status games-server.service 2>&1 | head -12 || true
+  printf '\n%s── games-status (site) ──%s\n' "$CYAN" "$RESET"
+  systemctl --user --no-pager status games-status.service 2>&1 | head -12 || true
+  pause
+}
+
+svc_logs() {
+  printf 'Logs de: 1) gerenciador  2) site\n'
+  read -r -p 'Opção [1]: ' l || return
+  local unit=games-server.service
+  [[ "$l" == 2 ]] && unit=games-status.service
+  journalctl --user -u "$unit" -n 80 --no-pager 2>&1 || \
+    printf '%sSem logs (serviço nunca iniciou?).%s\n' "$YELLOW" "$RESET"
+  pause
+}
+
+site_test() {
+  local bind port
+  printf '\n%sTeste do site em primeiro plano (Ctrl+C encerra o teste).%s\n' "$BOLD" "$RESET"
+  printf 'Bind: 1) 127.0.0.1 (use túnel SSH)  2) 0.0.0.0 (LAN)\n'
+  read -r -p 'Opção [1]: ' b || return
+  case "$b" in 2) bind="0.0.0.0" ;; *) bind="127.0.0.1" ;; esac
+  read -r -p 'Porta [8080]: ' port || return
+  [[ "$port" =~ ^[0-9]+$ ]] || port=8080
+  if [[ "$bind" == "127.0.0.1" ]]; then
+    printf '%sDo seu computador:%s ssh -L %s:127.0.0.1:%s <usuario>@<servidor>\n' "$DIM" "$RESET" "$port" "$port"
+    printf 'Depois abra http://127.0.0.1:%s\n\n' "$port"
+  else
+    local lip; lip="$(lan_ip)"
+    printf 'Na LAN, acesse http://%s:%s\n\n' "${lip:-<ip-do-servidor>}" "$port"
+  fi
+  python3 "$SCRIPT_DIR/status_site.py" --bind "$bind" --port "$port" || true
+  pause
+}
+
+# Fluxo de publicação: HTTPS público (nginx + certbot) ou HTTP LAN.
+site_publish() {
+  printf '\n%sPublicar o site.%s\n' "$BOLD" "$RESET"
+  printf 'Escopo: 1) Público na internet (HTTPS, recomendado)  2) Somente LAN (HTTP)\n'
+  read -r -p 'Opção [1]: ' scope || return
+  case "$scope" in
+    2) site_publish_lan ;;
+    *) site_publish_public ;;
+  esac
+}
+
+site_publish_lan() {
+  local port lip
+  read -r -p 'Porta do site na LAN [8080]: ' port || return
+  [[ "$port" =~ ^[0-9]+$ ]] || port=8080
+  printf '\n%sConfigurando o site para escutar na LAN (0.0.0.0:%s).%s\n' "$BOLD" "$port" "$RESET"
+  # Gera/atualiza a unidade com bind 0.0.0.0 e (re)inicia.
+  local units="$HOME/.config/systemd/user"
+  systemctl --user stop games-status.service 2>/dev/null || true
+  rm -f "$units/games-server.service" "$units/games-status.service" 2>/dev/null || true
+  systemctl --user daemon-reload 2>/dev/null || true
+  STATUS_BIND="0.0.0.0" STATUS_PORT="$port" bash "$SCRIPT_DIR/install_systemd.sh" || {
+    printf '%sFalha ao gerar unidades.%s\n' "$RED" "$RESET"; pause; return; }
+  run_sudo loginctl enable-linger "$(whoami)" || true
+  systemctl --user enable --now games-status.service || true
+  lip="$(lan_ip)"
+  printf '\n%s✔ Site publicado na LAN.%s\n' "$GREEN" "$RESET"
+  printf '  Acesse de qualquer dispositivo da rede: %shttp://%s:%s%s\n' "$BOLD" "${lip:-<ip-do-servidor>}" "$port" "$RESET"
+  printf '  Sem HTTPS e sem acesso externo (apenas rede local).\n'
+  pause
+}
+
+site_publish_public() {
+  local domain lan pub
+  read -r -p 'Domínio (ex.: status.seu-dominio.exemplo): ' domain || return
+  [[ -n "$domain" ]] || { printf '%sDomínio obrigatório.%s\n' "$RED" "$RESET"; pause; return; }
+  printf '\n%sVou instalar Nginx + Certbot, criar o proxy reverso e emitir HTTPS.%s\n' "$BOLD" "$RESET"
+  printf '%sPré-requisitos que o script NÃO controla: DNS do domínio e port forwarding no roteador.%s\n' "$DIM" "$RESET"
+  confirm 'Continuar?' || { pause; return; }
+
+  # 1) Site precisa estar em 127.0.0.1 (atrás do proxy). Garante a unidade.
+  local units="$HOME/.config/systemd/user"
+  if [[ ! -e "$units/games-status.service" ]]; then
+    STATUS_BIND="127.0.0.1" STATUS_PORT="8080" bash "$SCRIPT_DIR/install_systemd.sh" || {
+      printf '%sFalha ao gerar unidades.%s\n' "$RED" "$RESET"; pause; return; }
+  fi
+  run_sudo loginctl enable-linger "$(whoami)" || true
+  systemctl --user enable --now games-status.service || true
+
+  # 2) Instalar nginx + certbot.
+  printf '\n%sInstalando pacotes...%s\n' "$DIM" "$RESET"
+  run_sudo apt update || true
+  run_sudo apt install -y nginx certbot python3-certbot-nginx || {
+    printf '%sFalha ao instalar pacotes.%s\n' "$RED" "$RESET"; pause; return; }
+
+  # 3) Gerar a config do Nginx (proxy para 127.0.0.1:8080).
+  local conf="/etc/nginx/sites-available/$NGINX_SITE_NAME"
+  printf '\n%sCriando %s%s\n' "$DIM" "$conf" "$RESET"
+  sudo tee "$conf" >/dev/null <<NGINX
+server {
+    listen 80;
+    server_name $domain;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 10s;
+    }
+}
+NGINX
+  run_sudo ln -sf "$conf" "/etc/nginx/sites-enabled/$NGINX_SITE_NAME"
+  run_sudo nginx -t && run_sudo systemctl reload nginx || {
+    printf '%sNginx recusou a configuração; revise %s.%s\n' "$RED" "$conf" "$RESET"; pause; return; }
+
+  # 4) Emitir HTTPS com certbot (ajusta o server block e configura renovação).
+  printf '\n%sEmitindo certificado HTTPS para %s...%s\n' "$DIM" "$domain" "$RESET"
+  run_sudo certbot --nginx -d "$domain" || {
+    printf '%sCertbot falhou. Verifique DNS e a porta 80 acessível da internet.%s\n' "$YELLOW" "$RESET"; }
+
+  # 5) Detectar IPs e instruir port forwarding + DNS.
+  lan="$(lan_ip)"; pub="$(public_ip)"
+  printf '\n%s══════════════════════════════════════════════%s\n' "$GREEN" "$RESET"
+  printf '%s  Quase lá — faça estes 2 passos fora do servidor%s\n' "$BOLD" "$RESET"
+  printf '%s══════════════════════════════════════════════%s\n' "$GREEN" "$RESET"
+  printf '\n%s1) DNS%s: crie um registro A do domínio apontando para seu IP público:\n' "$BOLD" "$RESET"
+  printf '     %s%-24s A   %s%s\n' "$CYAN" "$domain" "${pub:-<seu-ip-publico>}" "$RESET"
+  printf '\n%s2) Port forwarding no roteador/modem%s: encaminhe para o IP interno do servidor:\n' "$BOLD" "$RESET"
+  printf '     %sTCP  80  →  %s:80%s     (validação/renovação do certificado e redirecionamento)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
+  printf '     %sTCP 443  →  %s:443%s    (HTTPS do site)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
+  printf '\nDepois disso, acesse: %shttps://%s%s\n' "$BOLD" "$domain" "$RESET"
+  printf '%sNão encaminhe a porta 8080 nem portas de RCON.%s\n' "$DIM" "$RESET"
+  pause
+}
+
+site_services_menu() {
+  while true; do
+    clear 2>/dev/null || printf '\n'
+    printf '%s══════════════════════════════════════════════%s\n' "$CYAN" "$RESET"
+    printf '%s  Site e serviços%s\n' "$BOLD" "$RESET"
+    printf '%s══════════════════════════════════════════════%s\n' "$CYAN" "$RESET"
+    cat <<MENU
+    1) Gerar/instalar serviços systemd
+    2) Habilitar e iniciar serviços (com linger)
+    3) Parar serviços
+    4) Desabilitar serviços
+    5) Status dos serviços
+    6) Ver logs (journalctl)
+    7) Testar o site agora (primeiro plano)
+    8) ${GREEN}Publicar o site (HTTPS público ou HTTP LAN)${RESET}
+    0) Voltar
+MENU
+    printf '%s──────────────────────────────────────────────%s\n' "$CYAN" "$RESET"
+    read -r -p 'Opção: ' opt || return
+    case "$opt" in
+      1) svc_install ;;
+      2) svc_enable ;;
+      3) svc_stop ;;
+      4) svc_disable ;;
+      5) svc_status ;;
+      6) svc_logs ;;
+      7) site_test ;;
+      8) site_publish ;;
+      0) return ;;
+      *) printf '%sOpção inválida.%s\n' "$RED" "$RESET"; sleep 1 ;;
+    esac
+  done
+}
+
 main_menu() {
   while true; do
     local data
@@ -142,6 +386,7 @@ main_menu() {
     6) Abrir console (tmux)
     7) Backup (jogo parado)
     8) ${GREEN}Adicionar novo jogo${RESET}
+    9) ${BLUE}Site e serviços${RESET}
     0) Sair
 MENU
     printf '%s──────────────────────────────────────────────%s\n' "$CYAN" "$RESET"
@@ -155,6 +400,7 @@ MENU
       6) "${MANAGER[@]}" console || true ;;
       7) game_submenu "backup" backup ;;
       8) add_game_flow ;;
+      9) site_services_menu ;;
       0) exit 0 ;;
       *) printf '%sOpção inválida.%s\n' "$RED" "$RESET"; sleep 1 ;;
     esac

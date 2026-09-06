@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Página de consulta: somente GET, sem console, configurações ou arquivos privados."""
 import argparse
+import errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import sys
 
 from manager import Manager
 
@@ -85,6 +87,17 @@ if __name__ == "__main__":
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.bind, args.port), handler(Manager(args.root)))
+    try:
+        server = ThreadingHTTPServer((args.bind, args.port), handler(Manager(args.root)))
+    except OSError as error:
+        if error.errno == errno.EADDRINUSE:
+            print(f"Porta {args.port} já está em uso em {args.bind}. "
+                  "O serviço games-status provavelmente já está ativo "
+                  "(use 'Status dos serviços') ou escolha outra porta.", file=sys.stderr)
+            sys.exit(1)
+        raise
     print(f"Site: http://{args.bind}:{server.server_port}", flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nSite encerrado.", flush=True)

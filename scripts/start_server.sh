@@ -226,6 +226,14 @@ svc_logs() {
 site_test() {
   local bind port
   printf '\n%sTeste do site em primeiro plano (Ctrl+C encerra o teste).%s\n' "$BOLD" "$RESET"
+  # Se o serviço já estiver ativo, o site já está no ar — testar aqui colidiria na porta.
+  if systemctl --user is-active --quiet games-status.service 2>/dev/null; then
+    printf '%sO serviço games-status já está ativo — o site já está no ar.%s\n' "$YELLOW" "$RESET"
+    printf 'Acesse via túnel SSH: %sssh -L 8080:127.0.0.1:8080 <usuario>@<servidor>%s\n' "$DIM" "$RESET"
+    printf 'Depois abra http://127.0.0.1:8080\n'
+    printf 'Para testar em primeiro plano, pare o serviço antes (opção 3) ou use outra porta.\n'
+    if ! confirm 'Tentar mesmo assim (em outra porta)?'; then pause; return; fi
+  fi
   printf 'Bind: 1) 127.0.0.1 (use túnel SSH)  2) 0.0.0.0 (LAN)\n'
   read -r -p 'Opção [1]: ' b || return
   case "$b" in 2) bind="0.0.0.0" ;; *) bind="127.0.0.1" ;; esac

@@ -37,7 +37,12 @@ def source_commands(port, password, commands):
             ident, kind, _ = packet(sock)
             if ident == -1:
                 raise ValueError("Autenticação RCON recusada")
-            if ident == 1 and kind == 2:
+            # A resposta de autenticação tem tipo 2 (SERVERDATA_AUTH_RESPONSE).
+            # O spec original ecoa o id do pedido (1), mas implementações reais
+            # variam — Conan Exiles Enhanced responde com ident=0. Como a falha é
+            # sinalizada de forma inequívoca por ident=-1 (tratado acima), qualquer
+            # pacote tipo 2 com ident != -1 confirma a autenticação.
+            if kind == 2:
                 break
         else:
             raise ValueError("Sem confirmação de autenticação RCON")

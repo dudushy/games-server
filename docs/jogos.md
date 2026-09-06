@@ -72,7 +72,11 @@ O caminho `ConanSandbox/Saved/Config/LinuxServer` e o binário
 O adaptador envia `shutdown` por Source RCON, seguindo a implementação pública do
 [adaptador Conan Enhanced do AMP](https://github.com/CubeCoders/AMPTemplates/blob/main/conan-exiles-enhanced.kvp).
 Essa é uma referência de implementação, não uma garantia de teste no seu mundo.
-Não inventamos um comando `save` genérico para Conan.
+Não inventamos um comando `save` genérico para Conan. O `shutdown` do Conan salva o
+banco antes de encerrar; a saída pode levar mais de um minuto em mundos grandes, e o
+gerenciador aguarda o processo sair de fato. A confirmação de autenticação Source
+RCON do Conan Enhanced chega com `ident=0` (e não `1`, como no spec original); o
+adaptador aceita qualquer resposta de autenticação que não seja a falha (`ident=-1`).
 
 Ao iniciar, somente as chaves `RconEnabled`, `RconPort` e `RconPassword` da seção
 `[RconPlugin]` em `Game.ini` são sincronizadas a partir do JSON privado. Configure

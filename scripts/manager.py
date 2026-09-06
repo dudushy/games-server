@@ -542,8 +542,24 @@ def run_game(manager, game, token):
     logs = manager.paths(game)[0] / "logs"
     logs.mkdir(exist_ok=True)
     log = (logs / f"{token}.log").open("ab", buffering=0)
+    # Sinais interativos entregues ao painel tmux (Ctrl+C, Ctrl+Z, Ctrl+\) atingiriam
+    # este runner, que fica em primeiro plano no painel. Se ele morresse, o estado
+    # ficaria inconsistente (jogo vivo, sem monitor). O filho é iniciado em nova
+    # sessão e reaplica o comportamento padrão desses sinais via preexec_fn, para que
+    # apenas o jogo os receba se algum dia for endereçado ao seu próprio grupo.
+    interactive_signals = (signal.SIGINT, signal.SIGTSTP, signal.SIGQUIT)
+
+    def reset_child_signals():
+        for sig in interactive_signals:
+            signal.signal(sig, signal.SIG_DFL)
+
     child = subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             preexec_fn=reset_child_signals)
+    # Agora que o filho já foi criado (e restaurou os padrões), o runner passa a
+    # ignorar esses sinais: Ctrl+C no console anexado não derruba o monitoramento.
+    for sig in interactive_signals:
+        signal.signal(sig, signal.SIG_IGN)
     def copy_output():
         while chunk := child.stdout.read1(65536):
             log.write(chunk)

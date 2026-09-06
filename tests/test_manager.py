@@ -189,6 +189,28 @@ for line in sys.stdin:
         self.assertTrue((self.manager.paths("minecraft")[2] / "saved").exists())
         self.assertFalse(living(self.manager.run_state()))
 
+    def test_ctrl_c_in_console_does_not_kill_runner_or_game(self):
+        # Reproduz apertar Ctrl+C no console anexado: o SIGINT vai ao painel tmux,
+        # onde o runner fica em primeiro plano. O runner deve ignorá-lo e o jogo,
+        # isolado em nova sessão, deve continuar vivo e sob monitoramento.
+        self.simulated_valheim()
+        self.manager.start("valheim")
+        run = self.manager.run_state()
+        self.assertTrue(living(run))
+        # Envia Ctrl+C (e Ctrl+Z) várias vezes ao painel, como um usuário faria.
+        for _ in range(3):
+            self.manager.tmux("send-keys", "-t", "game:0.0", "C-c")
+            self.manager.tmux("send-keys", "-t", "game:0.0", "C-z")
+        time.sleep(1)
+        # Jogo continua vivo e o estado permanece consistente (mesmo token/pid).
+        self.assertTrue(living(self.manager.run_state()))
+        self.assertEqual(self.manager.run_state()["token"], run["token"])
+        self.assertFalse((self.manager.runtime / f'{run["token"]}.exit.json').exists())
+        # A parada controlada ainda funciona depois do Ctrl+C.
+        self.manager.stop()
+        self.assertFalse(living(self.manager.run_state()))
+        self.assertTrue((self.manager.paths("valheim")[2] / "saved").exists())
+
     def test_stop_timeout_does_not_start_target_or_kill_original(self):
         cfg = self.simulated_valheim()
         cfg["stop_timeout"] = 1
@@ -399,6 +421,53 @@ class RconTest(unittest.TestCase):
             self.assertFalse(failures)
             self.assertEqual(received[-1][2], "shutdown")
         finally:
+            listener.close()
+
+    def test_auth_response_with_zero_ident_is_accepted(self):
+        # Conan Exiles Enhanced confirma a autenticação com ident=0 (não 1). O comando
+        # de shutdown deve mesmo assim ser enviado, sem timeout.
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        received = []
+        failures = []
+        def serve():
+            try:
+                with listener.accept()[0] as client:
+                    received.append(packet(client))   # pacote de auth (id=1, tipo 3)
+                    send(client, 0, 2, "")            # resposta de auth com ident=0
+                    received.append(packet(client))   # comando shutdown
+            except Exception as error:
+                failures.append(error)
+        thread = threading.Thread(target=serve)
+        thread.start()
+        try:
+            source_commands(listener.getsockname()[1], "secret-test", ["shutdown"])
+            thread.join(timeout=5)
+            self.assertFalse(failures)
+            self.assertEqual(received[-1][2], "shutdown")
+        finally:
+            listener.close()
+
+    def test_auth_failure_still_rejected(self):
+        # ident=-1 continua significando autenticação recusada.
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        def serve():
+            try:
+                with listener.accept()[0] as client:
+                    packet(client)
+                    send(client, -1, 2, "")
+            except Exception:
+                pass
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(ValueError, "recusada"):
+                source_commands(listener.getsockname()[1], "wrong", ["shutdown"])
+        finally:
+            thread.join(timeout=5)
             listener.close()
 
 

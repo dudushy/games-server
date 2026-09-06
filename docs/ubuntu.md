@@ -38,48 +38,51 @@ O procedimento geral está na
 [documentação do SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD).
 Confira a disponibilidade dos pacotes na versão do seu Ubuntu antes de instalar.
 
-Para os servidores Java (Minecraft, Hytale e jogos custom Mojang/Hytale):
+## 3. Instalar o Java com SDKMAN (Minecraft, Hytale e jogos custom Java)
 
-```bash
-sudo apt install openjdk-25-jre-headless
-java -version
-```
+Os servidores Java (Minecraft, Hytale e jogos custom dos provedores `mojang`/`hytale`)
+exigem um JDK. Neste projeto o Java é gerenciado com [SDKMAN](https://sdkman.io/) —
+essa é a forma **principal e única** recomendada. O SDKMAN instala e troca JDKs por
+usuário, sem `sudo`, e permite fixar a versão exata que cada jogo exige (por exemplo,
+um jogo antigo que precisa de Java 17 e outro que precisa de Java 25) sem conflitar
+entre si nem com o sistema.
 
-O [Ubuntu 26.04 fornece OpenJDK 25](https://packages.ubuntu.com/resolute/openjdk-25-jre-headless).
-Minecraft 26.1 passou a exigir Java 25, conforme as
-[notas da Mojang](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1).
-O instalador Minecraft lê o requisito de Java dos metadados da versão escolhida;
-não fixa uma versão do jogo no código. Para versões antigas, configure um
-executável Java compatível no JSON do jogo.
-
-### Alternativa recomendada: SDKMAN para gerenciar JDKs
-
-Se você precisa alternar entre versões de Java (por exemplo, um jogo antigo que
-exige Java 17 e outro que exige Java 25), o [SDKMAN](https://sdkman.io/) facilita
-instalar e trocar JDKs por usuário, sem `sudo` e sem conflitar com o Java do
-sistema. Instale como o usuário dos jogos:
+O SDKMAN precisa do pacote `zip`/`unzip`, já incluídos na instalação de ferramentas
+acima. Instale-o como o usuário dos jogos (nunca com `sudo`):
 
 ```bash
 curl -s "https://get.sdkman.io" | bash
 source "$HOME/.sdkman/bin/sdkman-init.sh"
 sdk list java            # lista as distribuições disponíveis
-sdk install java 25-tem  # exemplo: Temurin 25
+sdk install java 25-tem  # exemplo: Temurin 25 (Minecraft 26.1+ exige Java 25)
 java -version
 ```
 
+Minecraft 26.1 passou a exigir Java 25, conforme as
+[notas da Mojang](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1).
+O instalador Minecraft lê o requisito de Java dos metadados da versão escolhida e
+não fixa uma versão do jogo no código.
+
 O SDKMAN instala em `~/.sdkman`; o `java` passa a apontar para a versão escolhida
-naquele shell. Para fixar um JDK específico para um jogo, aponte o campo `java` do
-JSON do jogo para o caminho absoluto do executável, por exemplo:
-`~/.sdkman/candidates/java/25-tem/bin/java`. Assim cada jogo usa a versão correta
-independentemente do padrão do sistema. Confira a versão instalada com `sdk current
-java` e a lista com `sdk list java`.
+naquele shell. **Para garantir que cada jogo use sempre a versão correta**
+(inclusive sob o systemd, que não carrega o shell interativo), aponte o campo `java`
+do JSON do jogo para o caminho absoluto do executável, por exemplo:
+
+```json
+"java": "/home/USUARIO/.sdkman/candidates/java/25-tem/bin/java"
+```
+
+Assim o jogo não depende do JDK padrão do shell. Confira a versão instalada com
+`sdk current java` e a lista com `sdk list java`. Para instalar um segundo JDK
+(ex.: `sdk install java 17-tem`), repita o comando e aponte o `java` de cada jogo
+para o caminho correspondente.
 
 Bibliotecas dos binários nativos variam por versão. Em caso de erro ao iniciar,
 consulte o log e execute `ldd` no binário oficial já baixado. Instale os pacotes
 correspondentes às bibliotecas ausentes. Não é necessário instalar Wine para a
 versão Linux nativa de servidores que a ofereçam.
 
-## 3. Escolher uma raiz persistente
+## 4. Escolher uma raiz persistente
 
 ```bash
 export GAMES_ROOT="$HOME/.local/share/games-server"
@@ -89,7 +92,7 @@ Esse já é o padrão. Se usar outra pasta, mantenha o mesmo valor em todo termi
 e serviço. O script cria diretórios privados e usa `umask 077`. Execute o menu sem
 `sudo`; misturar donos de arquivos causa falhas de atualização e salvamento.
 
-## 4. Rede
+## 5. Rede
 
 Configure reserva DHCP/endereço estável na rede interna e encaminhe somente as
 portas dos jogos escolhidos. O IP público fixo não substitui o encaminhamento.

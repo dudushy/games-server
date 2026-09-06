@@ -49,10 +49,17 @@ de colocar mundos importantes sob gerenciamento.
 ./start_server.sh console
 ```
 
-Desanexe com **Ctrl+B, depois D**. A saída também é gravada em
+Desanexe com **Ctrl+B, depois D** — essa é a forma correta de sair do console
+mantendo o jogo rodando. A saída também é gravada em
 `games/<jogo>/logs/<execução>.log`. Logs podem conter informações privadas; não são
 publicados pelo site. Se o processo já terminou, consulte o arquivo, pois a sessão
 pode ter encerrado. Os logs não têm rotação automática nesta versão.
+
+O monitor do jogo (o runner dentro do tmux) ignora **Ctrl+C**, **Ctrl+Z** e
+**Ctrl+\\**. Se você apertar Ctrl+C por engano no console anexado, nem o jogo nem o
+monitoramento são derrubados: o jogo roda isolado em sua própria sessão e o runner
+continua acompanhando. Para parar um jogo, use sempre `./start_server.sh stop`
+(ou `switch`), que faz o encerramento com salvamento e backup.
 
 ## Configurar o systemd
 

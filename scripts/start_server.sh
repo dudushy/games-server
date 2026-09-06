@@ -260,12 +260,48 @@ site_test() {
 # Fluxo de publicação: HTTPS público (nginx + certbot) ou HTTP LAN.
 site_publish() {
   printf '\n%sPublicar o site.%s\n' "$BOLD" "$RESET"
-  printf 'Escopo: 1) Público na internet (HTTPS, recomendado)  2) Somente LAN (HTTP)\n'
+  printf 'Como o HTTPS/entrada pública será feito?\n'
+  printf '  1) %sAtrás de um proxy reverso externo%s (Caddy/nginx em outra máquina) — recomendado\n' "$BOLD" "$RESET"
+  printf '  2) HTTPS neste próprio servidor (instala nginx + certbot aqui)\n'
+  printf '  3) Somente LAN (HTTP, sem proxy)\n'
   read -r -p 'Opção [1]: ' scope || return
   case "$scope" in
-    2) site_publish_lan ;;
-    *) site_publish_public ;;
+    2) site_publish_public ;;
+    3) site_publish_lan ;;
+    *) site_publish_proxy ;;
   esac
+}
+
+# Cenário recomendado: outro host (ex.: um Raspberry Pi com Caddy) termina o TLS e
+# faz o proxy até este servidor. Aqui só expomos o site na LAN e mostramos a config
+# pronta para colar no proxy.
+site_publish_proxy() {
+  local port lip
+  printf '\n%sPublicação atrás de proxy reverso externo.%s\n' "$BOLD" "$RESET"
+  printf '%sO proxy (Caddy/nginx em outra máquina) termina o HTTPS e encaminha até aqui.%s\n' "$DIM" "$RESET"
+  read -r -p 'Porta do site nesta máquina [8080]: ' port || return
+  [[ "$port" =~ ^[0-9]+$ ]] || port=8080
+  # O proxy precisa alcançar o site pela rede: bind em 0.0.0.0 (não loopback).
+  local units="$HOME/.config/systemd/user"
+  systemctl --user stop games-status.service 2>/dev/null
+  rm -f "$units/games-server.service" "$units/games-status.service" 2>/dev/null
+  systemctl --user daemon-reload 2>/dev/null
+  STATUS_BIND="0.0.0.0" STATUS_PORT="$port" bash "$SCRIPT_DIR/install_systemd.sh" \
+    || { printf '%sFalha ao gerar unidades.%s\n' "$RED" "$RESET"; pause; return; }
+  run_sudo loginctl enable-linger "$(whoami)"
+  systemctl --user enable --now games-server.service games-status.service
+  lip="$(lan_ip)"
+  printf '\n%s✔ Site exposto na LAN em %s:%s (HTTP).%s\n' "$GREEN" "${lip:-<ip-deste-servidor>}" "$port" "$RESET"
+  printf '\n%sNo host do proxy, aponte o domínio para este servidor.%s\n' "$BOLD" "$RESET"
+  printf '\n%sExemplo para Caddy%s (/etc/caddy/Caddyfile):\n' "$CYAN" "$RESET"
+  printf '  %sseu-dominio.exemplo {\n      reverse_proxy %s:%s\n  }%s\n' "$DIM" "${lip:-<ip-deste-servidor>}" "$port" "$RESET"
+  printf 'Recarregue o proxy: %ssudo systemctl reload caddy%s\n' "$DIM" "$RESET"
+  printf '\n%sExemplo para nginx%s (bloco server, dentro de um host com HTTPS):\n' "$CYAN" "$RESET"
+  printf '  %slocation / { proxy_pass http://%s:%s; proxy_set_header Host $host; }%s\n' "$DIM" "${lip:-<ip-deste-servidor>}" "$port" "$RESET"
+  printf '\n%sNo modem, encaminhe 80/443 para o host do PROXY (não para este servidor).%s\n' "$YELLOW" "$RESET"
+  printf 'Crie o registro DNS do domínio apontando para seu IP público.\n'
+  printf '%sO certificado HTTPS é responsabilidade do proxy (o Caddy emite automaticamente).%s\n' "$DIM" "$RESET"
+  pause
 }
 
 site_publish_lan() {
@@ -438,7 +474,7 @@ site_services_menu() {
     5) Status dos serviços
     6) Ver logs (journalctl)
     7) Testar o site agora (primeiro plano)
-    8) ${GREEN}Publicar o site (HTTPS público ou HTTP LAN)${RESET}
+    8) ${GREEN}Publicar o site (proxy externo / HTTPS local / LAN)${RESET}
     0) Voltar
 MENU
     printf '%s──────────────────────────────────────────────%s\n' "$CYAN" "$RESET"

@@ -16,13 +16,17 @@ Tudo o que este documento descreve pode ser feito pelo menu principal, em
   `systemctl --user enable --now`.
 - **Parar / Desabilitar / Status / Logs** dos serviços.
 - **Testar o site agora** — sobe o site em primeiro plano (Ctrl+C encerra).
-- **Publicar o site** — dois caminhos:
-  - **Público (HTTPS)**: instala Nginx + Certbot, cria o proxy reverso para
-    `127.0.0.1:8080`, emite o certificado e, ao final, mostra o registro DNS e o
-    port forwarding (portas 80 e 443) que você precisa configurar fora do servidor,
-    detectando os IPs público e da LAN automaticamente.
-  - **LAN (HTTP)**: publica o site em `0.0.0.0` na porta escolhida e mostra o
-    endereço `http://<ip-da-lan>:<porta>` para acesso interno.
+- **Publicar o site** — três caminhos:
+  - **Atrás de proxy reverso externo** (recomendado): expõe o site em `0.0.0.0` na
+    porta escolhida e mostra a config pronta para colar no proxy (Caddy/nginx em
+    outra máquina, ex.: um Raspberry Pi). O proxy termina o HTTPS e encaminha até
+    aqui; o certificado é responsabilidade do proxy. No modem, os 80/443 vão para o
+    host do proxy, não para este servidor.
+  - **HTTPS neste servidor**: instala Nginx + Certbot localmente, cria o proxy para
+    `127.0.0.1:8080`, emite o certificado e mostra o registro DNS e o port
+    forwarding (80 e 443) para este servidor. Use quando NÃO há proxy externo.
+  - **Somente LAN (HTTP)**: publica o site em `0.0.0.0` na porta escolhida e mostra
+    o endereço `http://<ip-da-lan>:<porta>` para acesso interno.
 
 As seções abaixo documentam os mesmos passos manualmente, caso você prefira.
 

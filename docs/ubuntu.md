@@ -25,7 +25,7 @@ necessário (fora do escopo deste instalador).
 ```bash
 sudo apt update
 sudo apt install software-properties-common ca-certificates curl unzip \
-  tmux python3 python3-websocket rsync
+  tmux python3 python3-websocket rsync zip
 sudo add-apt-repository multiverse
 sudo dpkg --add-architecture i386
 sudo apt update

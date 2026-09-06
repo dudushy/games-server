@@ -286,8 +286,25 @@ site_publish_public() {
   local domain lan pub
   read -r -p 'Domínio (ex.: status.seu-dominio.exemplo): ' domain || return
   [[ -n "$domain" ]] || { printf '%sDomínio obrigatório.%s\n' "$RED" "$RESET"; pause; return; }
+  lan="$(lan_ip)"; pub="$(public_ip)"
+
+  # Pré-requisitos externos PRECISAM estar prontos ANTES do certbot: o desafio
+  # HTTP-01 exige que a porta 80 do domínio chegue neste servidor pela internet.
+  printf '\n%s══════════════════════════════════════════════%s\n' "$YELLOW" "$RESET"
+  printf '%s  ANTES de emitir o HTTPS, configure (fora do servidor):%s\n' "$BOLD" "$RESET"
+  printf '%s══════════════════════════════════════════════%s\n' "$YELLOW" "$RESET"
+  printf '\n%s1) DNS%s: registro A do domínio apontando para seu IP público:\n' "$BOLD" "$RESET"
+  printf '     %s%-24s A   %s%s\n' "$CYAN" "$domain" "${pub:-<seu-ip-publico>}" "$RESET"
+  printf '\n%s2) Port forwarding no roteador/modem%s → IP interno deste servidor:\n' "$BOLD" "$RESET"
+  printf '     %sTCP  80  →  %s:80%s     (validação/renovação do certificado + redirect)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
+  printf '     %sTCP 443  →  %s:443%s    (HTTPS do site)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
+  printf '\n%sAtenção:%s cada porta externa (80/443) só pode apontar para UM destino.\n' "$YELLOW" "$RESET"
+  printf 'Se outro serviço da rede já usa 80/443, remova/ajuste aquela regra ou\n'
+  printf 'centralize os sites num único proxy reverso. Não encaminhe 8080 nem RCON.\n\n'
+  confirm 'Já configurou o DNS e o port forwarding acima?' || {
+    printf '%sConfigure primeiro e rode esta opção novamente.%s\n' "$YELLOW" "$RESET"; pause; return; }
+
   printf '\n%sVou instalar Nginx + Certbot, criar o proxy reverso e emitir HTTPS.%s\n' "$BOLD" "$RESET"
-  printf '%sPré-requisitos que o script NÃO controla: DNS do domínio e port forwarding no roteador.%s\n' "$DIM" "$RESET"
   confirm 'Continuar?' || { pause; return; }
 
   # 1) Site precisa estar em 127.0.0.1 (atrás do proxy). Garante a unidade.
@@ -305,13 +322,21 @@ site_publish_public() {
   run_sudo apt install -y nginx certbot python3-certbot-nginx || {
     printf '%sFalha ao instalar pacotes.%s\n' "$RED" "$RESET"; pause; return; }
 
-  # 3) Gerar a config do Nginx (proxy para 127.0.0.1:8080).
+  # 3) Gerar a config do Nginx: proxy para 127.0.0.1:8080 e um webroot dedicado
+  #    para o desafio ACME (HTTP-01), servido só pela porta 80.
   local conf="/etc/nginx/sites-available/$NGINX_SITE_NAME"
+  local webroot="/var/www/$NGINX_SITE_NAME"
+  run_sudo mkdir -p "$webroot/.well-known/acme-challenge"
   printf '\n%sCriando %s%s\n' "$DIM" "$conf" "$RESET"
   sudo tee "$conf" >/dev/null <<NGINX
 server {
     listen 80;
     server_name $domain;
+
+    # Desafio ACME (HTTP-01) servido diretamente do webroot, sem proxy.
+    location /.well-known/acme-challenge/ {
+        root $webroot;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -325,24 +350,69 @@ NGINX
   run_sudo nginx -t && run_sudo systemctl reload nginx || {
     printf '%sNginx recusou a configuração; revise %s.%s\n' "$RED" "$conf" "$RESET"; pause; return; }
 
-  # 4) Emitir HTTPS com certbot (ajusta o server block e configura renovação).
-  printf '\n%sEmitindo certificado HTTPS para %s...%s\n' "$DIM" "$domain" "$RESET"
-  run_sudo certbot --nginx -d "$domain" || {
-    printf '%sCertbot falhou. Verifique DNS e a porta 80 acessível da internet.%s\n' "$YELLOW" "$RESET"; }
+  # 3b) Checar se o domínio chega neste servidor pela porta 80 (evita certbot cego).
+  printf '\n%sVerificando acessibilidade do domínio na porta 80...%s\n' "$DIM" "$RESET"
+  local token="acme-precheck-$$"
+  echo "$token" | sudo tee "$webroot/.well-known/acme-challenge/$token" >/dev/null
+  local got
+  got="$(curl -fsS -m 10 "http://$domain/.well-known/acme-challenge/$token" 2>/dev/null)"
+  run_sudo rm -f "$webroot/.well-known/acme-challenge/$token"
+  if [[ "$got" != "$token" ]]; then
+    printf '%s✗ O domínio NÃO respondeu com o conteúdo esperado na porta 80.%s\n' "$RED" "$RESET"
+    printf 'Isso significa que a porta 80 externa não chega a este servidor (%s).\n' "${lan:-?}"
+    printf 'Causa comum: outra regra de port forwarding usa a porta 80 para outro IP,\n'
+    printf 'ou o DNS ainda não propagou. Ajuste e rode a opção novamente.\n'
+    printf '%sNão vou chamar o certbot para não gastar tentativas de emissão.%s\n' "$YELLOW" "$RESET"
+    pause; return
+  fi
+  printf '%s✔ Porta 80 chega a este servidor. Emitindo certificado...%s\n' "$GREEN" "$RESET"
 
-  # 5) Detectar IPs e instruir port forwarding + DNS.
-  lan="$(lan_ip)"; pub="$(public_ip)"
-  printf '\n%s══════════════════════════════════════════════%s\n' "$GREEN" "$RESET"
-  printf '%s  Quase lá — faça estes 2 passos fora do servidor%s\n' "$BOLD" "$RESET"
-  printf '%s══════════════════════════════════════════════%s\n' "$GREEN" "$RESET"
-  printf '\n%s1) DNS%s: crie um registro A do domínio apontando para seu IP público:\n' "$BOLD" "$RESET"
-  printf '     %s%-24s A   %s%s\n' "$CYAN" "$domain" "${pub:-<seu-ip-publico>}" "$RESET"
-  printf '\n%s2) Port forwarding no roteador/modem%s: encaminhe para o IP interno do servidor:\n' "$BOLD" "$RESET"
-  printf '     %sTCP  80  →  %s:80%s     (validação/renovação do certificado e redirecionamento)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
-  printf '     %sTCP 443  →  %s:443%s    (HTTPS do site)\n' "$CYAN" "${lan:-<ip-lan-do-servidor>}" "$RESET"
-  printf '\nDepois disso, acesse: %shttps://%s%s\n' "$BOLD" "$domain" "$RESET"
-  printf '%sNão encaminhe a porta 8080 nem portas de RCON.%s\n' "$DIM" "$RESET"
+  # 4) Emitir HTTPS com certbot via webroot (validação só por HTTP-01/porta 80).
+  run_sudo certbot certonly --webroot -w "$webroot" -d "$domain" --agree-tos --non-interactive --register-unsafely-without-email \
+    && configure_https_block "$conf" "$domain" "$webroot" \
+    || { printf '%sCertbot falhou. Veja /var/log/letsencrypt/letsencrypt.log.%s\n' "$YELLOW" "$RESET"; pause; return; }
+
+  printf '\n%s✔ Site publicado com HTTPS.%s\n' "$GREEN" "$RESET"
+  printf '  Acesse: %shttps://%s%s\n' "$BOLD" "$domain" "$RESET"
+  printf '  A renovação automática é feita pelo timer do certbot (systemd).\n'
   pause
+  return
+}
+
+# Adiciona o bloco HTTPS (443) ao arquivo do Nginx após o certificado ser emitido,
+# mantendo o redirecionamento de 80 para 443.
+configure_https_block() {
+  local conf="$1" domain="$2" webroot="$3"
+  sudo tee "$conf" >/dev/null <<NGINX
+server {
+    listen 80;
+    server_name $domain;
+
+    location /.well-known/acme-challenge/ {
+        root $webroot;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name $domain;
+
+    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 10s;
+    }
+}
+NGINX
+  run_sudo nginx -t && run_sudo systemctl reload nginx
 }
 
 site_services_menu() {

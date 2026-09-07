@@ -211,6 +211,53 @@ for line in sys.stdin:
         self.assertFalse(living(self.manager.run_state()))
         self.assertTrue((self.manager.paths("valheim")[2] / "saved").exists())
 
+    def test_hook_stop_accepts_signal_exit_code(self):
+        # Jogo custom com stop=hook cujo servidor salva o mundo e então encerra com um
+        # código de saída NÃO-padrão (ex.: servidores Unreal Engine salvam e depois
+        # crasham com SIGSEGV durante o cleanup). No modo hook, o encerramento correto
+        # é responsabilidade do hook (que retorna 0); o código de saída do processo não
+        # deve bloquear a troca (regressão: antes o modo hook exigia código 0).
+        entry = {"name": "HookGame", "provider": "steam", "appid": "1",
+                 "executable": "server.sh", "stop": "hook", "port": 7788}
+        atomic_json(self.manager.root / "config/custom_games.json", {"hookgame": entry})
+        base, current, data = self.manager.paths("hookgame")
+        release = base / "releases/first"
+        release.mkdir(parents=True)
+        data.mkdir()
+        current.symlink_to(release, target_is_directory=True)
+        exe = release / "server.sh"
+        exe.write_text('''#!/usr/bin/env python3
+import signal, sys, time
+from pathlib import Path
+data = Path(__file__).resolve().parent.parent.parent / "data"
+def stop(*_):
+    (data / "saved").write_text("world saved")
+    sys.exit(139)  # 128+SIGSEGV: salva e "crasha" no cleanup, como servidores UE
+signal.signal(signal.SIGINT, stop)
+print("hook server ready", flush=True)
+while True: time.sleep(0.1)
+''')
+        exe.chmod(0o700)
+        # Hook local que envia SIGINT ao grupo do processo (GAME_PID) e espera.
+        hook = self.manager.root / "hook.sh"
+        hook.write_text('''#!/usr/bin/env bash
+kill -INT -- "-$GAME_PID" 2>/dev/null || kill -INT "$GAME_PID"
+for _ in $(seq 1 40); do kill -0 "$GAME_PID" 2>/dev/null || exit 0; sleep 0.1; done
+exit 0
+''')
+        hook.chmod(0o700)
+        cfg = defaults("hookgame", self.manager.games)
+        cfg.update(enabled=True, stop_hook=str(hook), shutdown_verified=True,
+                   launch_args=["--headless"], start_timeout=10, stop_timeout=15)
+        atomic_json(self.manager.root / "config/hookgame.json", cfg)
+        self.manager.start("hookgame")
+        self.assertTrue(living(self.manager.run_state()))
+        # Não deve levantar erro mesmo o processo saindo com 130.
+        self.manager.stop()
+        self.assertFalse(living(self.manager.run_state()))
+        self.assertTrue((data / "saved").exists())
+        self.assertFalse((self.manager.runtime / "blocked.json").exists())
+
     def test_stop_timeout_does_not_start_target_or_kill_original(self):
         cfg = self.simulated_valheim()
         cfg["stop_timeout"] = 1

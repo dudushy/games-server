@@ -488,8 +488,19 @@ class Manager:
         while time.monotonic() < deadline:
             result = read_json(self.runtime / f'{run["token"]}.exit.json')
             if not living(run) and result:
-                allowed = [0, 130, -signal.SIGINT] if mode == "sigint" else [0]
-                if result.get("code") not in allowed:
+                if mode == "hook":
+                    # No modo hook, o encerramento correto é responsabilidade do hook
+                    # (código local validado pelo administrador). O hook já rodou com
+                    # check=True acima: se retornou 0, o encerramento é considerado limpo.
+                    # O código de saída do PROCESSO não é confiável aqui — servidores
+                    # Unreal Engine, por exemplo, salvam o mundo e depois encerram com
+                    # SIGSEGV (-11) durante o cleanup do engine. Confiamos no hook.
+                    allowed = None  # aceita qualquer código de saída do processo
+                elif mode == "sigint":
+                    allowed = [0, 130, -signal.SIGINT]
+                else:
+                    allowed = [0]
+                if allowed is not None and result.get("code") not in allowed:
                     raise ValueError("Processo terminou com erro; troca bloqueada. Inspecione os logs e os dados")
                 self.backup(game)
                 if preserve_desired:

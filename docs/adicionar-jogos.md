@@ -124,3 +124,6 @@ Depois de `configure <id>`, edite `config/<id>.json` com o jogo parado:
   de RCON; habilite o RCON na configuração do próprio jogo (em `data/`).
 - Valide sempre o encerramento e a persistência do mundo em um mundo descartável
   antes de colocar dados importantes sob gerenciamento.
+- Modpacks de Minecraft (Forge) não são baixados pelo provedor `mojang` (que só
+  traz o JAR vanilla). Para montar um server pack de modpack à mão e integrá-lo
+  como jogo custom, veja [modpacks](modpacks.md).

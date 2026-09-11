@@ -105,6 +105,7 @@ siga [publicação do site](docs/site.md). Não há ações administrativas pelo
 - [Ubuntu e dependências](docs/ubuntu.md)
 - [Provedores, configurações e fontes por jogo](docs/jogos.md)
 - [Adicionar novos jogos ao catálogo](docs/adicionar-jogos.md)
+- [Modpacks de Minecraft (Forge) — montagem manual](docs/modpacks.md)
 - [Operação, supervisão, backups e restauração](docs/operacao.md)
 - [Migração das instalações existentes](docs/migracao.md)
 - [Site público e rede](docs/site.md)

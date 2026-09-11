@@ -37,10 +37,15 @@ def read_json(url):
 
 def java_major(java):
     result = subprocess.run([java, "-version"], capture_output=True, text=True, check=True)
-    match = re.search(r'version "(\d+)', result.stderr + result.stdout)
+    # Aceita tanto o esquema moderno ("17", "21", "25") quanto o legado ("1.8.0_504").
+    # No esquema legado, a major real é o segundo número (1.8 -> 8, 1.7 -> 7).
+    match = re.search(r'version "(\d+)(?:\.(\d+))?', result.stderr + result.stdout)
     if not match:
         raise ValueError("Não foi possível detectar a versão do Java")
-    return int(match[1])
+    first, second = int(match[1]), match[2]
+    if first == 1 and second is not None:
+        return int(second)
+    return first
 
 
 def fetch(game, cfg, stage, tools_dir, meta=None):

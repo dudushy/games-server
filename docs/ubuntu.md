@@ -77,6 +77,11 @@ Assim o jogo não depende do JDK padrão do shell. Confira a versão instalada c
 (ex.: `sdk install java 17-tem`), repita o comando e aponte o `java` de cada jogo
 para o caminho correspondente.
 
+Modpacks legados exigem JDKs antigos: **Minecraft 1.12.2 (Forge) exige Java 8**
+(`sdk install java 8.0.504+1-tem`). O Java 8 se identifica como `1.8.0_xxx`; o
+gerenciador reconhece esse esquema legado como major 8. Veja o procedimento de
+montagem em [modpacks](modpacks.md).
+
 Bibliotecas dos binários nativos variam por versão. Em caso de erro ao iniciar,
 consulte o log e execute `ldd` no binário oficial já baixado. Instale os pacotes
 correspondentes às bibliotecas ausentes. Não é necessário instalar Wine para a

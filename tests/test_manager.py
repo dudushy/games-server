@@ -518,5 +518,33 @@ class RconTest(unittest.TestCase):
             listener.close()
 
 
+class JavaMajorTest(unittest.TestCase):
+    def _fake_run(self, version_line):
+        def run(args, capture_output, text, check):
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr=version_line)
+        return run
+
+    def test_legacy_scheme_java_8(self):
+        # Java 8 reporta "1.8.0_504"; a major real é 8, não 1.
+        with patch("providers.subprocess.run", self._fake_run('openjdk version "1.8.0_504"\n')):
+            self.assertEqual(providers.java_major("java"), 8)
+
+    def test_legacy_scheme_java_7(self):
+        with patch("providers.subprocess.run", self._fake_run('java version "1.7.0_80"\n')):
+            self.assertEqual(providers.java_major("java"), 7)
+
+    def test_modern_scheme(self):
+        for line, expected in (('openjdk version "17.0.10"\n', 17),
+                               ('openjdk version "21"\n', 21),
+                               ('openjdk version "25.0.1"\n', 25)):
+            with patch("providers.subprocess.run", self._fake_run(line)):
+                self.assertEqual(providers.java_major("java"), expected)
+
+    def test_unparseable_version_raises(self):
+        with patch("providers.subprocess.run", self._fake_run("no version here\n")):
+            with self.assertRaises(ValueError):
+                providers.java_major("java")
+
+
 if __name__ == "__main__":
     unittest.main()

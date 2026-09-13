@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from catalog import GAMES, defaults, catalog, load_custom, validate_custom_entry, launch, persistent_links
-from manager import Manager, atomic_json, living, read_json
+from manager import Manager, atomic_json, living, read_json, players_from_unreal_log, uptime_seconds
 import providers
 from rcon import packet, send, source_commands
 from status_site import handler
@@ -127,6 +127,60 @@ class ManagerTest(unittest.TestCase):
         self.assertNotIn("private-test-password", payload)
         self.assertNotIn(self.tmp.name, payload)
         self.assertIsNone(json.loads(payload)["active_game"])
+
+    def smalland_status_entry(self):
+        return next(g for g in self.manager.status()["games"] if g["id"] == "smalland")
+
+    def test_smalland_experimental_until_shutdown_verified(self):
+        # Sem validação: continua "experimental" (validação pendente).
+        cfg = self.configure("smalland")
+        cfg.update(shutdown_verified=False)
+        atomic_json(self.manager.root / "config" / "smalland.json", cfg)
+        self.assertTrue(self.smalland_status_entry()["experimental"])
+        # Após validar o encerramento por hook, deixa de ser experimental.
+        cfg.update(shutdown_verified=True)
+        atomic_json(self.manager.root / "config" / "smalland.json", cfg)
+        self.assertFalse(self.smalland_status_entry()["experimental"])
+
+    def test_non_hook_game_is_never_experimental(self):
+        self.configure("conan")
+        entry = next(g for g in self.manager.status()["games"] if g["id"] == "conan")
+        self.assertFalse(entry["experimental"])
+
+    def test_smalland_name_has_no_experimental_label(self):
+        self.assertEqual(GAMES["smalland"]["name"], "Smalland")
+
+    def test_status_reports_uptime_and_player_keys(self):
+        payload = self.manager.status()
+        # Chaves presentes; None quando não há jogo ativo.
+        self.assertIn("uptime_seconds", payload)
+        self.assertIn("players_online", payload)
+        self.assertIsNone(payload["uptime_seconds"])
+        self.assertIsNone(payload["players_online"])
+
+    def test_players_from_unreal_log_counts_open_minus_closed(self):
+        log = Path(self.tmp.name) / "server.log"
+        log.write_text(
+            "LogNet: AddClientConnection: Added client connection: A\n"
+            "LogNet: AddClientConnection: Added client connection: B\n"
+            "LogNet: AddClientConnection: Added client connection: C\n"
+            "LogNet: UNetConnection::Close: [UNetConnection] A\n"
+        )
+        # 3 conexões abertas, 1 fechada => 2 online.
+        self.assertEqual(players_from_unreal_log(log), 2)
+
+    def test_players_from_unreal_log_never_negative_or_leaks(self):
+        log = Path(self.tmp.name) / "server2.log"
+        log.write_text(
+            "LogNet: UNetConnection::Close: [UNetConnection] X\n"
+            "LogNet: UNetConnection::Close: [UNetConnection] Y\n"
+        )
+        self.assertEqual(players_from_unreal_log(log), 0)
+        self.assertIsNone(players_from_unreal_log(Path(self.tmp.name) / "missing.log"))
+
+    def test_uptime_seconds_handles_bad_run(self):
+        self.assertIsNone(uptime_seconds({}))
+        self.assertIsNone(uptime_seconds({"start": "not-a-number"}))
 
     def test_rcon_changes_preserve_other_ini_settings(self):
         cfg = self.configure("conan")

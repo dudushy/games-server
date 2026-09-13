@@ -16,12 +16,17 @@ processos e protocolos RCON. As credenciais e os mundos ficam fora do repositór
 | Rust vanilla | SteamCMD, `258550`, Linux | `server.save` e `quit` por WebRCON local |
 | Minecraft Java vanilla | Manifesto e JAR oficiais da Mojang | `save-all flush` e `stop` no console |
 | Hytale | Downloader oficial com OAuth | `stop` no console |
-| Smalland | SteamCMD, `808040`, Linux | **Experimental: exige hook de parada validado pelo administrador** |
+| Smalland | SteamCMD, `808040`, Linux | `stop_hook` local (exige validação única do administrador para deixar de ser experimental) |
 
 Os adaptadores foram implementados a partir das fontes em [jogos](docs/jogos.md).
 Os testes locais usam servidores simulados; ainda é necessário validar cada jogo
 real, inclusive restauração dos mundos e conexão de jogadores. O gerenciador não
 assume o controle de instalações já existentes automaticamente.
+
+O Smalland começa marcado como **experimental** ("Validação pendente") porque exige
+um hook de parada revisado. Depois que o administrador valida o encerramento e
+define `shutdown_verified=true` (veja [Configurar o Smalland](#configurar-o-smalland)),
+ele passa a ser tratado como um jogo normal na lista e no site.
 
 Além dos jogos embutidos, é possível **adicionar qualquer servidor dedicado** com
 suporte a SteamCMD, Minecraft (Mojang) ou Hytale sem editar código; veja
@@ -97,8 +102,65 @@ python3 scripts/status_site.py
 ```
 
 Acesse `http://127.0.0.1:8080` na máquina. A página lista os jogos configurados e
-o **processo ativo**, sem afirmar que ele já aceita jogadores. Para acesso público,
-siga [publicação do site](docs/site.md). Não há ações administrativas pelo site.
+o **processo ativo**, com o **tempo de atividade (uptime)** e a **quantidade de
+jogadores online** do jogo ativo, sem afirmar que ele já aceita jogadores. Só é
+exibido o número agregado de jogadores — nunca nomes, IDs ou endereços. Para acesso
+público, siga [publicação do site](docs/site.md). Não há ações administrativas pelo site.
+
+A contagem de jogadores é lida do log do próprio jogo para servidores baseados em
+Unreal Engine (Smalland, Conan). Nos demais jogos a coluna aparece como `—`.
+
+## Configurar o Smalland
+
+O Smalland instala normalmente (`install smalland`), mas `start`/`switch` **recusam
+iniciar** enquanto o encerramento não for validado. Isso é intencional: o adaptador
+não embute um `kill -9`; ele chama um `stop_hook` que você revisa. Enquanto não
+validado, o jogo aparece como **"Validação pendente"** no menu e no site.
+
+Passos para deixá-lo disponível:
+
+1. **Instale**: `./start_server.sh install smalland`.
+2. **Monte os `launch_args`** a partir do script distribuído na release (mapa,
+   `SERVERNAME`, `PASSWORD`, credenciais EOS, `-port`, `-log` etc.). Edite
+   `config/smalland.json` → `launch_args` (lista de strings). O adaptador liga
+   `SMALLAND/Saved` a `data/Saved`; se a versão usar outro caminho, ajuste antes.
+3. **Crie um `stop_hook`** executável (caminho absoluto). Ele recebe `GAME_PID` e
+   `GAME_DATA` no ambiente, deve solicitar uma **saída normal** do servidor e
+   retornar código zero. Teste salvamento, encerramento e restauração em um mundo
+   descartável. Não use `kill -9` nem `tmux kill-session`.
+4. **Valide**: em `config/smalland.json`, defina o caminho absoluto de `stop_hook`
+   e `shutdown_verified: true`.
+5. **Habilite**: `enabled: true`. Depois `./start_server.sh switch smalland`.
+
+Uma vez com `stop_hook` válido (executável, caminho absoluto) e
+`shutdown_verified: true`, o Smalland **deixa de ser experimental**: o nome passa a
+ser apenas "Smalland" e o status deixa de mostrar "Validação pendente", passando a
+"Instalado"/"Processo ativo" como qualquer outro jogo.
+
+Exemplo de `config/smalland.json` (ajuste os valores ao seu servidor):
+
+```json
+{
+  "enabled": true,
+  "name": "Smalland",
+  "port": 7777,
+  "stop_timeout": 180,
+  "start_timeout": 60,
+  "extra_args": [],
+  "stop_hook": "/home/USUARIO/.local/share/games-server/tools/smalland/stop_hook.sh",
+  "launch_args": [
+    "SMALLAND",
+    "/Game/Maps/WorldGame/WorldGame_Smalland?SERVERNAME=MeuServidor?PASSWORD=SEGREDO?CROSSPLAY?SESSIONPLATFORM=pc",
+    "-port=7777",
+    "-log"
+  ],
+  "shutdown_verified": true
+}
+```
+
+Detalhes das credenciais EOS e das fontes do adaptador estão em
+[jogos](docs/jogos.md#smalland--integração-experimental). Segredos (senha do mundo,
+`DedicatedServerClientSecret` etc.) ficam só em `config/`, que está fora do Git.
 
 ## Documentação
 

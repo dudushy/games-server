@@ -29,7 +29,7 @@ GAMES = {
                   "executable": "server.jar", "stop": "console", "port": 25565},
     "hytale": {"name": "Hytale", "provider": "hytale", "executable": "Server/HytaleServer.jar",
                "stop": "console", "port": 5520},
-    "smalland": {"name": "Smalland (experimental)", "provider": "steam", "appid": "808040",
+    "smalland": {"name": "Smalland", "provider": "steam", "appid": "808040",
                  "executable": "SMALLAND/Binaries/Linux/SMALLANDServer-Linux-Shipping",
                  "stop": "hook", "port": 7777},
 }

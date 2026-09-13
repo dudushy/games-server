@@ -69,6 +69,51 @@ def boot_id():
     return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
+# CLK_TCK do sistema: jiffies por segundo para converter o starttime do processo.
+CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
+
+
+def uptime_seconds(run):
+    """Tempo (em segundos) desde o início do processo principal do jogo ativo.
+
+    Usa o starttime (em jiffies desde o boot) já guardado em run['start'] e o uptime
+    da máquina. Retorna None quando não é possível calcular. Não expõe caminhos nem
+    dados privados.
+    """
+    try:
+        start_jiffies = int(run["start"])
+        machine_uptime = float(Path("/proc/uptime").read_text().split()[0])
+        seconds = machine_uptime - (start_jiffies / CLOCK_TICKS)
+        return int(seconds) if seconds >= 0 else None
+    except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError):
+        return None
+
+
+# Jogos baseados em Unreal Engine (log Net/EOS). A diferença entre conexões abertas
+# e fechadas no log da execução atual dá a contagem de jogadores online. É uma
+# heurística por engine — não há query/RCON de contagem nesses jogos.
+UNREAL_LOG_GAMES = ("smalland", "conan")
+
+
+def players_from_unreal_log(log_path):
+    """Conta jogadores online lendo apenas marcadores de conexão do log Unreal.
+
+    Retorna um inteiro >= 0 ou None se o log não existir/for ilegível. Lê somente
+    a contagem de eventos de conexão/desconexão; nunca extrai nomes, IDs ou IPs.
+    """
+    try:
+        opened = closed = 0
+        with open(log_path, "r", errors="replace") as handle:
+            for line in handle:
+                if "AddClientConnection" in line:
+                    opened += 1
+                elif "UNetConnection::Close" in line:
+                    closed += 1
+        return max(opened - closed, 0)
+    except OSError:
+        return None
+
+
 def living(run):
     if not run or run.get("boot") != boot_id():
         return False
@@ -528,14 +573,34 @@ class Manager:
         run = self.run_state()
         alive = living(run)
         blocked = read_json(self.runtime / "blocked.json")
-        return {"checked_at": time.time(), "active_game": run["game"] if alive else None,
+        active_game = run["game"] if alive else None
+        # players_online do jogo ativo: só quando é um jogo com log Unreal.
+        players_online = None
+        uptime = None
+        if alive:
+            uptime = uptime_seconds(run)
+            if active_game in UNREAL_LOG_GAMES:
+                log = self.paths(active_game)[0] / "logs" / f'{run.get("token")}.log'
+                players_online = players_from_unreal_log(log)
+
+        def game_entry(game, meta):
+            cfg = read_json(self.root / "config" / f"{game}.json", {})
+            # "Validação pendente" só se o jogo exige hook de parada E ainda não foi
+            # validado pelo administrador (shutdown_verified). Jogos embutidos com
+            # stop=hook (Smalland) deixam de ser experimentais após a validação.
+            needs_hook = meta.get("stop") == "hook"
+            experimental = needs_hook and not cfg.get("shutdown_verified", False)
+            return {"id": game, "name": meta["name"],
+                    "configured": (self.root / "config" / f"{game}.json").is_file(),
+                    "enabled": bool(cfg.get("enabled")),
+                    "installed": (self.paths(game)[1] / meta["executable"]).is_file(),
+                    "experimental": experimental}
+
+        return {"checked_at": time.time(), "active_game": active_game,
                 "state": "attention" if blocked else "running" if alive else "stopped",
                 "availability": "process_only", "external_processes_detected": bool(self.external()),
-                "games": [{"id": game, "name": meta["name"],
-                           "configured": (self.root / "config" / f"{game}.json").is_file(),
-                           "enabled": bool(read_json(self.root / "config" / f"{game}.json", {}).get("enabled")),
-                           "installed": (self.paths(game)[1] / meta["executable"]).is_file(),
-                           "experimental": game == "smalland"} for game, meta in games.items()]}
+                "uptime_seconds": uptime, "players_online": players_online,
+                "games": [game_entry(game, meta) for game, meta in games.items()]}
 
     def resume(self):
         if living(self.run_state()) or (self.runtime / "blocked.json").exists():

@@ -119,6 +119,8 @@ Teste de fora da rede doméstica (por exemplo, conexão móvel): roteadores pode
 não suportar acesso ao próprio IP público pela rede interna. O site continuar
 acessível não garante que as portas UDP de um jogo estejam encaminhadas.
 
-Esta versão não executa consultas de protocolo de todos os jogos, não exibe
-jogadores online e não permite escolher o jogo pela web. A escolha permanece no
-terminal do administrador.
+Esta versão não executa consultas de protocolo de todos os jogos e não permite
+escolher o jogo pela web. A escolha permanece no terminal do administrador. O site
+exibe **uptime** e **quantidade de jogadores online** do jogo ativo (apenas o número
+agregado, nunca nomes ou endereços); a contagem vem do log para jogos Unreal Engine
+(Smalland, Conan) e aparece como `—` nos demais.

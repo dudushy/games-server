@@ -108,7 +108,13 @@ exibido o número agregado de jogadores — nunca nomes, IDs ou endereços. Para
 público, siga [publicação do site](docs/site.md). Não há ações administrativas pelo site.
 
 A contagem de jogadores é lida do log do próprio jogo para servidores baseados em
-Unreal Engine (Smalland, Conan). Nos demais jogos a coluna aparece como `—`.
+Unreal Engine (Smalland, Conan) e para Minecraft (Java vanilla e modpacks `mojang`,
+como os de [modpacks](docs/modpacks.md)). Nos demais jogos a coluna aparece como `—`.
+
+O site tem um favicon próprio (`scripts/favicon.ico`): um joystick ao lado de um
+servidor. Ele é regenerável por `scripts/make_favicon.py` (veja
+[desenvolvimento](docs/desenvolvimento.md#favicon)); o Pillow usado na geração não
+é dependência de execução do gerenciador.
 
 ## Configurar o Smalland
 

@@ -18,7 +18,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from catalog import GAMES, defaults, catalog, load_custom, validate_custom_entry, launch, persistent_links
-from manager import Manager, atomic_json, living, read_json, players_from_unreal_log, uptime_seconds
+from manager import (Manager, atomic_json, living, read_json, players_from_minecraft_log,
+                     players_from_unreal_log, uptime_seconds)
 import providers
 from rcon import packet, send, source_commands
 from status_site import handler
@@ -177,6 +178,58 @@ class ManagerTest(unittest.TestCase):
         )
         self.assertEqual(players_from_unreal_log(log), 0)
         self.assertIsNone(players_from_unreal_log(Path(self.tmp.name) / "missing.log"))
+
+    def test_players_from_minecraft_log_counts_joined_minus_left(self):
+        log = Path(self.tmp.name) / "mc.log"
+        log.write_text(
+            "[22:01:15] [Server thread/INFO] [minecraft/DedicatedServer]: A joined the game\n"
+            "[22:02:00] [Server thread/INFO] [minecraft/DedicatedServer]: B joined the game\n"
+            "[22:03:10] [Server thread/INFO] [minecraft/DedicatedServer]: C joined the game\n"
+            "[22:10:50] [Server thread/INFO] [minecraft/DedicatedServer]: A left the game\n"
+        )
+        # 3 entradas, 1 saída => 2 online.
+        self.assertEqual(players_from_minecraft_log(log), 2)
+
+    def test_players_from_minecraft_log_ignores_ansi_color_codes(self):
+        # Modpacks Forge coloram o nome do jogador com códigos ANSI; as substrings
+        # 'joined the game'/'left the game' permanecem intactas.
+        log = Path(self.tmp.name) / "mc_ansi.log"
+        log.write_text(
+            "> \r\x1b[K[22:01:15] [Server thread/INFO]: \x1b[0;33;1mBelots\x1b[39;0m"
+            "\x1b[0;33;1m joined the game\x1b[39;0m\x1b[39;0m\n"
+            "> \r\x1b[K[22:10:50] [Server thread/INFO]: \x1b[0;33;1mBelots\x1b[39;0m"
+            "\x1b[0;33;1m left the game\x1b[39;0m\x1b[39;0m\n"
+        )
+        self.assertEqual(players_from_minecraft_log(log), 0)
+
+    def test_players_from_minecraft_log_never_negative_or_missing(self):
+        log = Path(self.tmp.name) / "mc2.log"
+        log.write_text(
+            "[00:00:01] [Server thread/INFO]: X left the game\n"
+            "[00:00:02] [Server thread/INFO]: Y left the game\n"
+        )
+        self.assertEqual(players_from_minecraft_log(log), 0)
+        self.assertIsNone(players_from_minecraft_log(Path(self.tmp.name) / "missing.log"))
+
+    def test_status_uses_minecraft_parser_for_active_mojang_game(self):
+        # Jogo custom mojang (ex.: modpack) ativo => status conta players pelo log
+        # do console (joined/left), como o vanilla.
+        atomic_json(self.manager.root / "config/custom_games.json", {
+            "modpack": {"name": "Modpack MC", "provider": "mojang",
+                        "executable": "server.jar", "stop": "console", "port": 25565}})
+        token = "tok-modpack"
+        logs = self.manager.paths("modpack")[0] / "logs"
+        logs.mkdir(parents=True)
+        (logs / f"{token}.log").write_text(
+            "[00:00:01] [Server thread/INFO]: A joined the game\n"
+            "[00:00:02] [Server thread/INFO]: B joined the game\n"
+            "[00:00:03] [Server thread/INFO]: A left the game\n")
+        atomic_json(self.manager.runtime / "run.json",
+                    {"game": "modpack", "token": token, "pid": 1, "start": "1", "boot": "b"})
+        with patch("manager.living", return_value=True):
+            payload = self.manager.status()
+        self.assertEqual(payload["active_game"], "modpack")
+        self.assertEqual(payload["players_online"], 1)
 
     def test_uptime_seconds_handles_bad_run(self):
         self.assertIsNone(uptime_seconds({}))
@@ -362,6 +415,23 @@ exit 0
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(urllib.request.Request(base + "/api/status", data=b"stop", method="POST"))
             self.assertEqual(error.exception.code, 501)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_site_serves_favicon_ico(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler(self.manager))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urllib.request.urlopen(base + "/favicon.ico") as response:
+                body = response.read()
+                self.assertEqual(response.headers.get("Content-Type"), "image/x-icon")
+                # Assinatura de um ICO: reservado=0, tipo=1 (ícone).
+                self.assertEqual(body[:4], b"\x00\x00\x01\x00")
+                self.assertGreater(len(body), 0)
         finally:
             server.shutdown()
             server.server_close()

@@ -14,6 +14,7 @@ PAGE = """<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Servidores de jogos</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
 <style>
 :root{color-scheme:dark;--bg:#0f1420;--card:#1a2233;--card2:#212c42;--line:#2c3a55;
 --text:#e6ecf7;--muted:#95a3bd;--accent:#5b9dff;--ok:#3ddc84;--warn:#ffcb3d;--bad:#ff5d5d;}
@@ -112,11 +113,32 @@ async function refresh(){
 refresh(); setInterval(refresh, 10000);
 """
 
+# Ícone do site (joystick + servidor), gerado por scripts/make_favicon.py e
+# versionado ao lado deste arquivo. Carregado uma vez no import; se ausente, a rota
+# /favicon.ico responde 404 sem derrubar o site.
+try:
+    FAVICON = (Path(__file__).with_name("favicon.ico")).read_bytes()
+except OSError:
+    FAVICON = None
+
 
 def handler(manager):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = self.path.split("?", 1)[0]
+            if route == "/favicon.ico":
+                # Ícone estático: pode ser cacheado (ao contrário do conteúdo dinâmico).
+                if FAVICON is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/x-icon")
+                self.send_header("Content-Length", str(len(FAVICON)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(FAVICON)
+                return
             if route == "/":
                 body, kind = PAGE.encode(), "text/html; charset=utf-8"
             elif route == "/status.js":

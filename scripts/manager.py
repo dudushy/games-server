@@ -114,6 +114,31 @@ def players_from_unreal_log(log_path):
         return None
 
 
+def players_from_minecraft_log(log_path):
+    """Conta jogadores online no log do console de servidores Minecraft (Mojang).
+
+    Vale para o servidor vanilla e para modpacks Forge (provider ``mojang``): o
+    console registra ``<nick> joined the game`` e ``<nick> left the game`` por
+    execução. A diferença dá a contagem online. Retorna um inteiro >= 0 ou None se
+    o log não existir/for ilegível.
+
+    Conta apenas eventos, nunca extrai nomes, IDs ou IPs. As substrings pesquisadas
+    permanecem intactas mesmo quando o console do modpack envolve o nome do jogador
+    com códigos de cor ANSI (ex.: ``\\x1b[0;33;1mBelots\\x1b[39;0m joined the game``).
+    """
+    try:
+        joined = left = 0
+        with open(log_path, "r", errors="replace") as handle:
+            for line in handle:
+                if "joined the game" in line:
+                    joined += 1
+                elif "left the game" in line:
+                    left += 1
+        return max(joined - left, 0)
+    except OSError:
+        return None
+
+
 def living(run):
     if not run or run.get("boot") != boot_id():
         return False
@@ -574,14 +599,18 @@ class Manager:
         alive = living(run)
         blocked = read_json(self.runtime / "blocked.json")
         active_game = run["game"] if alive else None
-        # players_online do jogo ativo: só quando é um jogo com log Unreal.
+        # players_online do jogo ativo: por engine, lendo só a contagem de eventos
+        # de conexão do log da execução atual. Unreal (Smalland, Conan) usa marcadores
+        # Net; Minecraft (provider mojang, vanilla ou modpack) usa joined/left.
         players_online = None
         uptime = None
         if alive:
             uptime = uptime_seconds(run)
+            log = self.paths(active_game)[0] / "logs" / f'{run.get("token")}.log'
             if active_game in UNREAL_LOG_GAMES:
-                log = self.paths(active_game)[0] / "logs" / f'{run.get("token")}.log'
                 players_online = players_from_unreal_log(log)
+            elif games.get(active_game, {}).get("provider") == "mojang":
+                players_online = players_from_minecraft_log(log)
 
         def game_entry(game, meta):
             cfg = read_json(self.root / "config" / f"{game}.json", {})

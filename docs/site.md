@@ -1,9 +1,14 @@
 # Site de consulta e publicação
 
 A página informa quais jogos estão configurados/instalados e qual processo está
-ativo. O servidor HTTP aceita apenas leitura de três rotas: `/`, `/status.js` e
-`/api/status`. Não serve diretórios do disco, senhas, comandos RCON ou logs.
-Por ser só-leitura e não expor dados privados, publicá-lo é seguro.
+ativo. O servidor HTTP aceita apenas leitura de quatro rotas: `/`, `/status.js`,
+`/api/status` e `/favicon.ico`. Não serve diretórios do disco, senhas, comandos
+RCON ou logs. Por ser só-leitura e não expor dados privados, publicá-lo é seguro.
+
+O ícone do site (`/favicon.ico`) é um arquivo estático versionado em
+`scripts/favicon.ico` — um joystick ao lado de um servidor, na paleta do tema. É a
+única rota com cache (`Cache-Control: public, max-age=86400`); as demais usam
+`no-store`. Para recriar o ícone, veja [desenvolvimento](desenvolvimento.md#favicon).
 
 ## Pelo menu (recomendado)
 
@@ -122,5 +127,6 @@ acessível não garante que as portas UDP de um jogo estejam encaminhadas.
 Esta versão não executa consultas de protocolo de todos os jogos e não permite
 escolher o jogo pela web. A escolha permanece no terminal do administrador. O site
 exibe **uptime** e **quantidade de jogadores online** do jogo ativo (apenas o número
-agregado, nunca nomes ou endereços); a contagem vem do log para jogos Unreal Engine
-(Smalland, Conan) e aparece como `—` nos demais.
+agregado, nunca nomes ou endereços); a contagem vem do log do jogo para servidores
+Unreal Engine (Smalland, Conan) e Minecraft (Java vanilla e modpacks `mojang`, como
+os montados em [modpacks](modpacks.md)), e aparece como `—` nos demais.

@@ -165,3 +165,7 @@ Com `GAMES_ROOT=$HOME/.local/share/games-server` e o jogo `stoneblock2`:
 - Warnings de mods (ex.: "missing the required element 'version'", "Can not get
   Fluid", módulos opcionais que não carregam) são comuns em packs 1.12.2 e não
   impedem o "Done". Erros fatais reais interrompem o boot antes do "Done".
+- **Contagem de jogadores no site**: por ser `provider: mojang`, o modpack tem a
+  contagem online lida do log do console (`joined the game`/`left the game`), como o
+  Minecraft vanilla. Aparece no cartão "Jogadores online" — só o número agregado,
+  nunca nomes. Detalhes em [desenvolvimento](desenvolvimento.md#contagem-de-jogadores).

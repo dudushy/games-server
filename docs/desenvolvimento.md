@@ -11,6 +11,7 @@
 | `scripts/providers.py` | SteamCMD, Mojang e Hytale Downloader |
 | `scripts/rcon.py` | Source RCON e WebRCON local |
 | `scripts/status_site.py` | Página e API somente de consulta |
+| `scripts/make_favicon.py` | Gera `scripts/favicon.ico` (uso pontual; exige Pillow) |
 | `scripts/install_systemd.sh` | Unidades de usuário, sem habilitação automática |
 
 Python usa a biblioteca padrão, exceto `websocket-client` para Rust, disponível
@@ -56,9 +57,46 @@ python3 -m unittest discover -s tests -v
 Os testes criam dados descartáveis em `/tmp`, sockets locais e um socket tmux
 exclusivo por teste. Precisam de permissão para abrir sockets/PTYs. Não usam o
 tmux padrão do usuário nem baixam jogos. Cobrem falha de download, proteção de
-configurações, checksum, EULA, concorrência, RCON fragmentado, rotas do site e
+configurações, checksum, EULA, concorrência, RCON fragmentado, rotas do site
+(incluindo o `/favicon.ico`), contagem de jogadores por log (Unreal e Minecraft) e
 troca real entre processos simulados. Verificam também que timeout não mata o
 processo anterior e que destino inválido não interrompe o jogo ativo.
+
+## Contagem de jogadores
+
+`status()` expõe `players_online` do jogo ativo lendo **apenas a contagem** de
+eventos de conexão no log da execução atual (`games/<jogo>/logs/<token>.log`),
+nunca nomes, IDs ou IPs. A seleção do parser é por engine:
+
+- Unreal Engine (`smalland`, `conan`, em `UNREAL_LOG_GAMES`) — diferença entre
+  `AddClientConnection` e `UNetConnection::Close` (`players_from_unreal_log`).
+- Minecraft (qualquer jogo com `provider == "mojang"`: o vanilla e modpacks Forge
+  montados como custom, como Stoneblock 2) — diferença entre `joined the game` e
+  `left the game` (`players_from_minecraft_log`). As substrings sobrevivem aos
+  códigos de cor ANSI que os modpacks emitem ao redor do nome do jogador.
+
+Nos demais jogos a contagem fica `None` e o site mostra `—`. É uma heurística por
+log; não há query/RCON de contagem nesses jogos.
+
+## Favicon
+
+O ícone do site é o arquivo estático `scripts/favicon.ico` (joystick + servidor,
+paleta do tema), servido em `GET /favicon.ico` por `status_site.py` e referenciado
+por `<link rel="icon">` na página. É a única resposta com cache do site.
+
+Ele é gerado por `scripts/make_favicon.py` com [Pillow](https://python-pillow.org/),
+que **não** é dependência de runtime — o site só serve o `.ico` já versionado.
+Recrie o ícone quando ajustar o desenho:
+
+```bash
+# Pillow via ambiente descartável (ex.: uv); nunca entra no runtime do projeto.
+uv run --with pillow python scripts/make_favicon.py
+# ou, com pip disponível:
+python3 -m venv /tmp/favicon-venv && /tmp/favicon-venv/bin/pip install pillow
+/tmp/favicon-venv/bin/python scripts/make_favicon.py
+```
+
+O script grava um `.ico` multi-resolução (16/32/48/64 px) ao lado de si mesmo.
 
 ## Limites que exigem validação real
 

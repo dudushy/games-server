@@ -605,6 +605,14 @@ class Manager:
                     # Unreal Engine, por exemplo, salvam o mundo e depois encerram com
                     # SIGSEGV (-11) durante o cleanup do engine. Confiamos no hook.
                     allowed = None  # aceita qualquer código de saída do processo
+                elif mode == "web":
+                    # No modo web (Rust), web_commands já confirmou o server.save
+                    # (esperou a resposta) e enviou o quit sem exceção — essa é a
+                    # confirmação do salvamento. O código de saída do RustDedicated
+                    # após o quit não é confiável: o Unity dedicated server costuma
+                    # ser encerrado com SIGKILL (-9) durante o cleanup. Confiamos no
+                    # WebRCON, como fazemos com o hook.
+                    allowed = None
                 elif mode == "sigint":
                     allowed = [0, 130, -signal.SIGINT]
                 else:

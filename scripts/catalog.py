@@ -236,9 +236,15 @@ def launch(game, cfg, current, data, games=None):
                 f'-Port={cfg["port"]}', f'-QueryPort={cfg["query_port"]}',
                 f'-MaxPlayers={cfg["max_players"]}']
     elif game == "rust":
+        # O RCON do Rust precisa ser configurado por ARGUMENTO: o server.cfg é lido
+        # tarde no boot, depois de o RCON já ter sido inicializado. Sem estes
+        # argumentos o servidor sobe com o RCON desabilitado e o stop (WebRCON) falha.
         args = [exe, "-batchmode", "-nographics", "+server.identity", "main",
                 "+server.port", str(cfg["port"]), "+server.queryport", str(cfg["query_port"]),
+                "+server.maxplayers", str(cfg["max_players"]),
                 "+server.worldsize", str(cfg["world_size"]), "+server.seed", str(cfg["seed"]),
+                "+rcon.web", "1", "+rcon.ip", "127.0.0.1",
+                "+rcon.port", str(cfg["rcon_port"]), "+rcon.password", cfg["rcon_password"],
                 "-logfile", "-"]
     elif game == "minecraft":
         cwd = data

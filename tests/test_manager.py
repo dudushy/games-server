@@ -871,6 +871,25 @@ class SettingsFileTest(unittest.TestCase):
             validate_custom_entry("palworld", entry)
 
 
+class RustLaunchTest(unittest.TestCase):
+    def test_rust_launch_passes_rcon_as_arguments(self):
+        # Regressão: o RCON do Rust precisa ir como argumento de linha de comando,
+        # não só no server.cfg (lido tarde no boot). Sem isso o RCON fica desabilitado
+        # e o stop (WebRCON) falha.
+        cfg = defaults("rust")
+        cfg["rcon_password"] = "senha-rcon-de-teste-forte-123456"
+        args, cwd, env = launch("rust", cfg, "/tmp/current", "/tmp/data")
+        self.assertIn("+rcon.web", args)
+        self.assertEqual(args[args.index("+rcon.web") + 1], "1")
+        self.assertIn("+rcon.port", args)
+        self.assertEqual(args[args.index("+rcon.port") + 1], str(cfg["rcon_port"]))
+        self.assertIn("+rcon.password", args)
+        self.assertEqual(args[args.index("+rcon.password") + 1], cfg["rcon_password"])
+        self.assertIn("+rcon.ip", args)
+        self.assertEqual(args[args.index("+rcon.ip") + 1], "127.0.0.1")
+        self.assertIn("+server.maxplayers", args)
+
+
 class PlayersFromQueryTest(unittest.TestCase):
     def test_mojang_uses_slp_on_game_port(self):
         meta = {"provider": "mojang", "port": 25565}

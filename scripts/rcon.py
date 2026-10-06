@@ -58,7 +58,11 @@ def web_commands(port, password, commands):
         raise ValueError("Rust exige o pacote python3-websocket") from error
     address = f"ws://127.0.0.1:{port}/{quote(password, safe='')}"
     try:
-        with websocket.create_connection(address, timeout=10, http_no_proxy=["127.0.0.1"]) as sock:
+        # Nota: nem toda versão da websocket-client suporta o objeto como context
+        # manager (1.9 não tem __exit__). Fechamos explicitamente em finally para
+        # funcionar em todas as versões.
+        sock = websocket.create_connection(address, timeout=10, http_no_proxy=["127.0.0.1"])
+        try:
             for ident, command in enumerate(commands, 1):
                 sock.send(json.dumps({"Identifier": ident, "Message": command, "Name": "games-server"}))
                 if command == "quit":
@@ -73,6 +77,11 @@ def web_commands(port, password, commands):
                         break
                 else:
                     raise ValueError("Rust não confirmou o comando de salvamento")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
     except Exception as error:
         # Bibliotecas WebSocket podem incluir a URL (que contém a senha) na exceção.
         raise ValueError("Falha no WebRCON local; verifique configuração e disponibilidade") from None

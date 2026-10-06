@@ -685,6 +685,43 @@ class RconTest(unittest.TestCase):
             listener.close()
 
 
+class WebRconTest(unittest.TestCase):
+    """web_commands (Rust/WebRCON) deve funcionar com libs cujo objeto de conexão
+    NÃO suporta context manager (websocket-client 1.9 não tem __exit__)."""
+
+    class _FakeWS:
+        # Deliberadamente SEM __enter__/__exit__: se web_commands usar 'with', quebra.
+        def __init__(self):
+            self.sent = []
+            self.closed = False
+            self._replies = []
+
+        def send(self, data):
+            msg = json.loads(data)
+            self.sent.append(msg["Message"])
+            # server.save responde com o mesmo Identifier; quit não precisa responder.
+            if msg["Message"] != "quit":
+                self._replies.append(json.dumps(
+                    {"Identifier": msg["Identifier"],
+                     "Message": "Invalidate Network Cache took 0.00 seconds"}))
+
+        def recv(self):
+            return self._replies.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    def test_web_commands_without_context_manager(self):
+        from rcon import web_commands
+        fake = self._FakeWS()
+        fake_module = type("M", (), {"create_connection": staticmethod(lambda *a, **k: fake)})
+        with patch.dict("sys.modules", {"websocket": fake_module}):
+            # Não deve levantar; antes quebrava com TypeError (uso de 'with').
+            web_commands(28016, "senhaAlfaNumerica123", ["server.save", "quit"])
+        self.assertEqual(fake.sent, ["server.save", "quit"])
+        self.assertTrue(fake.closed)
+
+
 class JavaMajorTest(unittest.TestCase):
     def _fake_run(self, version_line):
         def run(args, capture_output, text, check):

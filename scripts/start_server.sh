@@ -508,8 +508,9 @@ main_menu() {
     5) Status detalhado (JSON)
     6) Abrir console (tmux)
     7) Backup (jogo parado)
-    8) ${GREEN}Adicionar novo jogo${RESET}
-    9) ${BLUE}Site e serviços${RESET}
+    8) Editar settings do servidor
+    9) ${GREEN}Adicionar novo jogo${RESET}
+   10) ${BLUE}Site e serviços${RESET}
     0) Sair
 MENU
     printf '%s──────────────────────────────────────────────%s\n' "$CYAN" "$RESET"
@@ -522,8 +523,9 @@ MENU
       5) "${MANAGER[@]}" status; pause ;;
       6) "${MANAGER[@]}" console || true ;;
       7) game_submenu "backup" backup ;;
-      8) add_game_flow ;;
-      9) site_services_menu ;;
+      8) game_submenu "editar settings" edit-settings ;;
+      9) add_game_flow ;;
+      10) site_services_menu ;;
       0) exit 0 ;;
       *) printf '%sOpção inválida.%s\n' "$RED" "$RESET"; sleep 1 ;;
     esac

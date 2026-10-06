@@ -18,8 +18,9 @@ import tarfile
 import threading
 import time
 
-from catalog import GAMES, catalog, defaults, launch, persistent_links, validate_custom_entry, CUSTOM_FILE, BUILTIN
+from catalog import GAMES, catalog, defaults, launch, persistent_links, settings_file, validate_custom_entry, CUSTOM_FILE, BUILTIN
 from providers import fetch, java_major
+from query import minecraft_slp, steam_a2s_info
 from rcon import source_commands, web_commands
 
 SCRIPT = Path(__file__).resolve()
@@ -137,6 +138,44 @@ def players_from_minecraft_log(log_path):
         return max(joined - left, 0)
     except OSError:
         return None
+
+
+# Jogos cujo A2S_INFO (query Steam/Source) roda numa query port própria configurada.
+A2S_QUERY_PORT_GAMES = ("conan", "rust", "smalland")
+# Jogos consultados por A2S_INFO cuja query port é derivada da porta do jogo (+1),
+# o padrão quando não há uma query port dedicada (caso do Valheim).
+A2S_PORT_PLUS_ONE_GAMES = ("valheim",)
+
+
+def players_from_query(game, cfg, meta):
+    """Consulta o próprio servidor pela rede e retorna ``(online, max)`` ou None.
+
+    Escolhe o protocolo pela natureza do jogo: Minecraft (provider ``mojang``) usa
+    Server List Ping (SLP/TCP) na porta do jogo; jogos Steam/Source usam A2S_INFO
+    (UDP) na query port apropriada. A consulta é sempre a 127.0.0.1 (o servidor é
+    local) e lê apenas contagens agregadas — nunca nomes de jogadores.
+
+    Retorna None quando o jogo não suporta query ou quando a consulta falha; nesse
+    caso o chamador cai para a contagem por log.
+    """
+    host = "127.0.0.1"
+    provider = meta.get("provider")
+    port = cfg.get("port") or meta.get("port")
+    if provider == "mojang":
+        if not isinstance(port, int):
+            return None
+        return minecraft_slp(host, port)
+    if provider == "steam":
+        if game in A2S_QUERY_PORT_GAMES:
+            query_port = cfg.get("query_port")
+        elif game in A2S_PORT_PLUS_ONE_GAMES:
+            query_port = (port + 1) if isinstance(port, int) else None
+        else:
+            return None
+        if not isinstance(query_port, int):
+            return None
+        return steam_a2s_info(host, query_port)
+    return None
 
 
 def living(run):
@@ -593,24 +632,101 @@ class Manager:
         (self.runtime / "blocked.json").unlink(missing_ok=True)
         self.start(game)
 
+    # Chaves reescritas pelo gerenciador no próximo start (prepare_data); editá-las
+    # no arquivo de settings é inútil, então avisamos o administrador por jogo.
+    CONTROLLED_SETTINGS = {
+        "rust": ("rcon.web", "rcon.ip", "rcon.port", "rcon.password"),
+        "conan": ("RconEnabled", "RconPort", "RconPassword"),
+    }
+
+    def edit_settings(self, game):
+        """Abre o arquivo de settings do jogo no $EDITOR e, se o jogo estiver ativo,
+        oferece reiniciar para aplicar.
+
+        Jogos com arquivo de settings cru (Minecraft: server.properties, Rust:
+        server.cfg, Conan: ServerSettings.ini) editam esse arquivo em data/. Jogos
+        sem arquivo cru (Valheim, Hytale) editam config/<jogo>.json do gerenciador,
+        para que o administrador tenha sempre um ponto de edição pelo TUI.
+        """
+        games = self.games
+        if game not in games:
+            raise ValueError(f"Jogo desconhecido: {game}")
+        if not sys.stdin.isatty():
+            raise ValueError("edit-settings exige um terminal interativo")
+        relative = settings_file(game, games)
+        if relative:
+            target = self.paths(game)[2] / relative
+            if not target.exists():
+                raise ValueError(
+                    f"Arquivo de settings ainda não existe: {target}\n"
+                    "Instale e inicie o jogo ao menos uma vez para gerá-lo.")
+            controlled = self.CONTROLLED_SETTINGS.get(game)
+            if controlled:
+                print(f"Aviso: estas chaves são controladas pelo gerenciador e serão "
+                      f"reescritas no próximo início: {', '.join(controlled)}")
+        else:
+            # Sem arquivo de settings cru: edita a configuração do gerenciador.
+            target = self.root / "config" / f"{game}.json"
+            if not target.is_file():
+                raise ValueError(f"Configure primeiro: ./start_server.sh configure {game}")
+            print(f"Este jogo não tem arquivo de settings próprio; editando a "
+                  f"configuração do gerenciador: {target}")
+
+        before = target.read_bytes()
+        editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vi") or "vi"
+        try:
+            subprocess.run(shlex.split(editor) + [str(target)], check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            raise ValueError(f"Editor não concluiu a edição ({editor}): {error}") from None
+        after = target.read_bytes()
+        # Validação leve: se for o JSON do gerenciador, precisa continuar válido.
+        if not relative:
+            try:
+                json.loads(after.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                target.write_bytes(before)
+                raise ValueError("JSON inválido após a edição; alterações revertidas.") from None
+        if after == before:
+            print("Nenhuma alteração feita.")
+            return
+        print("Settings salvos.")
+        run = self.run_state()
+        if living(run) and run["game"] == game:
+            print("As alterações só serão aplicadas após REINICIAR o servidor "
+                  "(ele será parado com salvamento e backup, e iniciado de novo).")
+            answer = input("Reiniciar agora para aplicar? [s/N]: ").strip().lower()
+            if answer == "s":
+                self.switch(game)
+            else:
+                print("Alterações salvas; reinicie quando quiser para aplicá-las.")
+
     def status(self):
         games = self.games
         run = self.run_state()
         alive = living(run)
         blocked = read_json(self.runtime / "blocked.json")
         active_game = run["game"] if alive else None
-        # players_online do jogo ativo: por engine, lendo só a contagem de eventos
-        # de conexão do log da execução atual. Unreal (Smalland, Conan) usa marcadores
-        # Net; Minecraft (provider mojang, vanilla ou modpack) usa joined/left.
+        # players_online/players_max do jogo ativo. Primeiro tentamos a query de rede
+        # (SLP para Minecraft, A2S_INFO para jogos Steam/Source) — a mesma forma que
+        # as listas de servidores usam, que também traz o total de slots. Se a query
+        # falhar (jogo subindo, porta fechada), caímos para a contagem por log: Unreal
+        # (Smalland, Conan) usa marcadores Net; Minecraft usa joined/left. O log nunca
+        # informa o máximo, então players_max fica None nesse caminho.
         players_online = None
+        players_max = None
         uptime = None
         if alive:
             uptime = uptime_seconds(run)
-            log = self.paths(active_game)[0] / "logs" / f'{run.get("token")}.log'
-            if active_game in UNREAL_LOG_GAMES:
-                players_online = players_from_unreal_log(log)
-            elif games.get(active_game, {}).get("provider") == "mojang":
-                players_online = players_from_minecraft_log(log)
+            cfg = read_json(self.root / "config" / f"{active_game}.json", {})
+            queried = players_from_query(active_game, cfg, games.get(active_game, {}))
+            if queried is not None:
+                players_online, players_max = queried
+            else:
+                log = self.paths(active_game)[0] / "logs" / f'{run.get("token")}.log'
+                if active_game in UNREAL_LOG_GAMES:
+                    players_online = players_from_unreal_log(log)
+                elif games.get(active_game, {}).get("provider") == "mojang":
+                    players_online = players_from_minecraft_log(log)
 
         def game_entry(game, meta):
             cfg = read_json(self.root / "config" / f"{game}.json", {})
@@ -629,6 +745,7 @@ class Manager:
                 "state": "attention" if blocked else "running" if alive else "stopped",
                 "availability": "process_only", "external_processes_detected": bool(self.external()),
                 "uptime_seconds": uptime, "players_online": players_online,
+                "players_max": players_max,
                 "games": [game_entry(game, meta) for game, meta in games.items()]}
 
     def resume(self):
@@ -695,7 +812,7 @@ def main():
     parser.add_argument("--root", default=os.environ.get("GAMES_ROOT", str(Path.home() / ".local/share/games-server")))
     parser.add_argument("action", choices=["configure", "install", "update", "start", "switch", "stop",
                                            "backup", "import-data", "status", "console", "resume", "supervise",
-                                           "_run", "service-stop", "add-game"])
+                                           "_run", "service-stop", "add-game", "edit-settings"])
     parser.add_argument("game", nargs="?")
     parser.add_argument("token", nargs="?")
     args = parser.parse_args()
@@ -724,10 +841,12 @@ def main():
                 print(f"Supervisão: {error}", file=sys.stderr, flush=True)
             time.sleep(30)
     with manager.lock(wait=args.action == "service-stop"):
-        if args.action in ("configure", "install", "update", "start", "switch", "backup", "import-data") and not args.game:
+        if args.action in ("configure", "install", "update", "start", "switch", "backup", "import-data", "edit-settings") and not args.game:
             raise ValueError("Informe o jogo")
         if args.action == "add-game":
             manager.add_game(args.game)
+        elif args.action == "edit-settings":
+            manager.edit_settings(args.game)
         elif args.action == "configure":
             manager.configure(args.game)
         elif args.action in ("install", "update"):

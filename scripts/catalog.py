@@ -82,6 +82,13 @@ def validate_custom_entry(game_id, entry):
             path = Path(value)
             if path.is_absolute() or ".." in path.parts or "\\" in value:
                 raise ValueError("persistent não aceita caminhos absolutos, '..' nem '\\'")
+    settings = entry.get("settings_file")
+    if settings is not None:
+        if not isinstance(settings, str) or not settings:
+            raise ValueError("settings_file deve ser uma string não vazia")
+        settings_path = Path(settings)
+        if settings_path.is_absolute() or ".." in settings_path.parts or "\\" in settings:
+            raise ValueError("settings_file deve ser um caminho relativo, sem '..' nem '\\'")
     return True
 
 
@@ -103,6 +110,8 @@ def load_custom(root):
                  "executable": entry["executable"], "stop": entry["stop"],
                  "port": entry["port"], "custom": True,
                  "persistent": entry.get("persistent", {})}
+        if entry.get("settings_file"):
+            clean["settings_file"] = entry["settings_file"]
         if entry["provider"] == "steam":
             clean["appid"] = entry["appid"]
         games[game_id] = clean
@@ -164,6 +173,38 @@ def persistent_links(game, games=None):
         "rust": {"server": "server"},
         "smalland": {"SMALLAND/Saved": "Saved"},
     }.get(game, {})
+
+
+# Arquivo de settings "cru" que o administrador edita pelo TUI, relativo a data/.
+# Jogos sem um arquivo de settings de texto editável (Valheim é controlado por
+# argumentos; Hytale não expõe um) não aparecem aqui: nesse caso o TUI edita o
+# próprio JSON de configuração do gerenciador (config/<jogo>.json), para que o
+# administrador sempre tenha um lugar uniforme para ajustar settings.
+BUILTIN_SETTINGS_FILES = {
+    "minecraft": "server.properties",
+    "rust": "server/main/cfg/server.cfg",
+    "conan": "Saved/Config/LinuxServer/ServerSettings.ini",
+}
+
+
+def settings_file(game, games=None):
+    """Retorna o caminho (relativo a data/) do arquivo de settings cru, ou None.
+
+    None significa que o jogo não tem arquivo de settings de texto editável; o TUI
+    deve, nesse caso, abrir config/<jogo>.json. Jogos custom podem declarar
+    ``settings_file`` na própria entrada (validado em validate_custom_entry).
+    """
+    games = games or GAMES
+    meta = games.get(game, {})
+    if meta.get("custom"):
+        value = meta.get("settings_file")
+        if value:
+            return value
+        # Fallback por provedor: JARs Mojang usam server.properties.
+        if meta.get("provider") == "mojang":
+            return "server.properties"
+        return None
+    return BUILTIN_SETTINGS_FILES.get(game)
 
 
 def launch(game, cfg, current, data, games=None):

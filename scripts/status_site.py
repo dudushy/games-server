@@ -66,6 +66,13 @@ JAVASCRIPT = """function fmtUptime(s){
   const p=[]; if(d) p.push(d+'d'); if(h||d) p.push(h+'h'); p.push(m+'min');
   return p.join(' ');
 }
+function fmtPlayers(data){
+  // Mostra online/max (ex.: 20/100) quando o máximo é conhecido; só o online quando
+  // não há máximo (contagem por log); — quando nada está disponível ou está parado.
+  if(data.state!=='running'||data.players_online==null) return '—';
+  if(data.players_max!=null) return data.players_online+'/'+data.players_max;
+  return ''+data.players_online;
+}
 async function refresh(){
   const stateEl=document.getElementById('state');
   try{
@@ -78,8 +85,7 @@ async function refresh(){
       data.state==='running'?'Em execução':'Parado';
     document.getElementById('active').textContent=data.active_game||'—';
     document.getElementById('uptime').textContent=data.state==='running'?fmtUptime(data.uptime_seconds):'—';
-    document.getElementById('players').textContent=
-      (data.state==='running'&&data.players_online!=null)?data.players_online:'—';
+    document.getElementById('players').textContent=fmtPlayers(data);
     const warn=document.getElementById('warnbar');
     if(data.external_processes_detected){
       warn.style.display='block';

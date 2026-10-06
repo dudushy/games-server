@@ -17,10 +17,11 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from catalog import GAMES, defaults, catalog, load_custom, validate_custom_entry, launch, persistent_links
+from catalog import GAMES, defaults, catalog, load_custom, validate_custom_entry, launch, persistent_links, settings_file
 from manager import (Manager, atomic_json, living, read_json, players_from_minecraft_log,
-                     players_from_unreal_log, uptime_seconds)
+                     players_from_unreal_log, players_from_query, uptime_seconds)
 import providers
+import query
 from rcon import packet, send, source_commands
 from status_site import handler
 from http.server import ThreadingHTTPServer
@@ -230,6 +231,48 @@ class ManagerTest(unittest.TestCase):
             payload = self.manager.status()
         self.assertEqual(payload["active_game"], "modpack")
         self.assertEqual(payload["players_online"], 1)
+
+    def test_status_prefers_query_over_log_and_reports_max(self):
+        # Quando a query de rede responde, o status usa online/max dela — não o log.
+        self.configure("conan")
+        self.fake_release("conan")
+        token = "tok-q"
+        logs = self.manager.paths("conan")[0] / "logs"
+        logs.mkdir(parents=True)
+        # Log sugeriria 3 jogadores; a query deve prevalecer com (8, 40).
+        (logs / f"{token}.log").write_text(
+            "LogNet: AddClientConnection: A\nLogNet: AddClientConnection: B\n"
+            "LogNet: AddClientConnection: C\n")
+        atomic_json(self.manager.runtime / "run.json",
+                    {"game": "conan", "token": token, "pid": 1, "start": "1", "boot": "b"})
+        with patch("manager.living", return_value=True), \
+             patch("manager.players_from_query", return_value=(8, 40)):
+            payload = self.manager.status()
+        self.assertEqual(payload["players_online"], 8)
+        self.assertEqual(payload["players_max"], 40)
+
+    def test_status_falls_back_to_log_when_query_fails(self):
+        # Query indisponível (None) => cai para a contagem por log; max fica None.
+        self.configure("conan")
+        self.fake_release("conan")
+        token = "tok-fb"
+        logs = self.manager.paths("conan")[0] / "logs"
+        logs.mkdir(parents=True)
+        (logs / f"{token}.log").write_text(
+            "LogNet: AddClientConnection: A\nLogNet: AddClientConnection: B\n"
+            "LogNet: UNetConnection::Close: A\n")
+        atomic_json(self.manager.runtime / "run.json",
+                    {"game": "conan", "token": token, "pid": 1, "start": "1", "boot": "b"})
+        with patch("manager.living", return_value=True), \
+             patch("manager.players_from_query", return_value=None):
+            payload = self.manager.status()
+        self.assertEqual(payload["players_online"], 1)
+        self.assertIsNone(payload["players_max"])
+
+    def test_status_includes_players_max_key_when_idle(self):
+        payload = self.manager.status()
+        self.assertIn("players_max", payload)
+        self.assertIsNone(payload["players_max"])
 
     def test_uptime_seconds_handles_bad_run(self):
         self.assertIsNone(uptime_seconds({}))
@@ -668,6 +711,191 @@ class JavaMajorTest(unittest.TestCase):
         with patch("providers.subprocess.run", self._fake_run("no version here\n")):
             with self.assertRaises(ValueError):
                 providers.java_major("java")
+
+
+class QueryTest(unittest.TestCase):
+    """Parsing dos protocolos de query com servidores sintéticos em 127.0.0.1."""
+
+    def _serve_tcp(self, responder):
+        """Sobe um servidor TCP efêmero; responder(client_socket) trata uma conexão."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+
+        def serve():
+            try:
+                with listener.accept()[0] as client:
+                    responder(client)
+            except Exception:
+                pass
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        return port, listener, thread
+
+    def _serve_udp(self, responder):
+        """Sobe um servidor UDP efêmero; responder(sock, data, addr) responde um datagrama."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+        def serve():
+            try:
+                while True:
+                    data, addr = sock.recvfrom(4096)
+                    if not responder(sock, data, addr):
+                        break
+            except Exception:
+                pass
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        return port, sock, thread
+
+    def test_minecraft_slp_parses_online_and_max(self):
+        def responder(client):
+            # Lê handshake + status request (não precisamos interpretar) e responde.
+            client.recv(4096)
+            payload = json.dumps({"version": {"name": "1.20", "protocol": 763},
+                                  "players": {"online": 7, "max": 20, "sample": [
+                                      {"name": "secreto", "id": "x"}]},
+                                  "description": {"text": "oi"}}).encode("utf-8")
+            body = query._encode_varint(0x00) + query._encode_varint(len(payload)) + payload
+            client.sendall(query._encode_varint(len(body)) + body)
+        port, listener, thread = self._serve_tcp(responder)
+        try:
+            self.assertEqual(query.minecraft_slp("127.0.0.1", port), (7, 20))
+        finally:
+            listener.close()
+            thread.join(timeout=5)
+
+    def test_minecraft_slp_returns_none_on_garbage(self):
+        def responder(client):
+            client.recv(4096)
+            client.sendall(b"not a valid slp packet at all")
+        port, listener, thread = self._serve_tcp(responder)
+        try:
+            self.assertIsNone(query.minecraft_slp("127.0.0.1", port, timeout=1.0))
+        finally:
+            listener.close()
+            thread.join(timeout=5)
+
+    def test_minecraft_slp_returns_none_when_closed(self):
+        # Porta fechada em alta probabilidade: conexão recusada => None, sem exceção.
+        self.assertIsNone(query.minecraft_slp("127.0.0.1", 1, timeout=1.0))
+
+    def _a2s_info_body(self, players, maximum):
+        # 0xFFFFFFFF + 'I' + Protocol + 4 strings C + ID(short) + Players + Max + ...
+        return (b"\xFF\xFF\xFF\xFF\x49\x11"
+                + b"Nome\x00" + b"Mapa\x00" + b"pasta\x00" + b"Jogo\x00"
+                + struct.pack("<H", 0) + bytes([players, maximum])
+                + b"\x00\x00\x00\x00")  # bytes extras ignorados
+
+    def test_a2s_info_direct_response(self):
+        body = self._a2s_info_body(3, 10)
+        def responder(sock, data, addr):
+            sock.sendto(body, addr)
+            return False
+        port, server, thread = self._serve_udp(responder)
+        try:
+            self.assertEqual(query.steam_a2s_info("127.0.0.1", port), (3, 10))
+        finally:
+            server.close()
+            thread.join(timeout=5)
+
+    def test_a2s_info_handles_challenge(self):
+        body = self._a2s_info_body(12, 100)
+        state = {"stage": 0}
+        def responder(sock, data, addr):
+            if state["stage"] == 0:
+                # Primeiro A2S_INFO: responde com challenge S2C_CHALLENGE (0x41).
+                sock.sendto(b"\xFF\xFF\xFF\xFF\x41\x01\x02\x03\x04", addr)
+                state["stage"] = 1
+                return True
+            # Segundo A2S_INFO (com o challenge anexado): responde com os dados.
+            self.assertTrue(data.endswith(b"\x01\x02\x03\x04"))
+            sock.sendto(body, addr)
+            return False
+        port, server, thread = self._serve_udp(responder)
+        try:
+            self.assertEqual(query.steam_a2s_info("127.0.0.1", port), (12, 100))
+        finally:
+            server.close()
+            thread.join(timeout=5)
+
+    def test_a2s_info_returns_none_on_timeout(self):
+        # Nenhum servidor escutando: timeout curto => None, sem exceção.
+        self.assertIsNone(query.steam_a2s_info("127.0.0.1", 1, timeout=0.3))
+
+
+class SettingsFileTest(unittest.TestCase):
+    def test_builtin_games_map_to_expected_files(self):
+        self.assertEqual(settings_file("minecraft"), "server.properties")
+        self.assertEqual(settings_file("rust"), "server/main/cfg/server.cfg")
+        self.assertEqual(settings_file("conan"), "Saved/Config/LinuxServer/ServerSettings.ini")
+
+    def test_games_without_raw_settings_return_none(self):
+        # Valheim e Hytale não têm arquivo de settings cru: TUI edita o JSON de config.
+        self.assertIsNone(settings_file("valheim"))
+        self.assertIsNone(settings_file("hytale"))
+
+    def test_custom_mojang_defaults_to_server_properties(self):
+        games = dict(GAMES)
+        games["paper"] = {"name": "Paper", "provider": "mojang", "executable": "server.jar",
+                          "stop": "console", "port": 25565, "custom": True}
+        self.assertEqual(settings_file("paper", games), "server.properties")
+
+    def test_custom_explicit_settings_file(self):
+        games = dict(GAMES)
+        games["palworld"] = {"name": "Palworld", "provider": "steam", "appid": "1",
+                             "executable": "PalServer.sh", "stop": "console", "port": 8211,
+                             "custom": True, "settings_file": "Pal/Saved/Config/x.ini"}
+        self.assertEqual(settings_file("palworld", games), "Pal/Saved/Config/x.ini")
+
+    def test_custom_steam_without_settings_file_returns_none(self):
+        games = dict(GAMES)
+        games["palworld"] = {"name": "Palworld", "provider": "steam", "appid": "1",
+                             "executable": "PalServer.sh", "stop": "console", "port": 8211,
+                             "custom": True}
+        self.assertIsNone(settings_file("palworld", games))
+
+    def test_validate_rejects_absolute_settings_file(self):
+        entry = {"name": "P", "provider": "steam", "appid": "1", "executable": "p.sh",
+                 "stop": "console", "port": 8211, "settings_file": "/etc/passwd"}
+        with self.assertRaisesRegex(ValueError, "settings_file"):
+            validate_custom_entry("palworld", entry)
+
+    def test_validate_rejects_traversal_settings_file(self):
+        entry = {"name": "P", "provider": "steam", "appid": "1", "executable": "p.sh",
+                 "stop": "console", "port": 8211, "settings_file": "../../etc/passwd"}
+        with self.assertRaisesRegex(ValueError, "settings_file"):
+            validate_custom_entry("palworld", entry)
+
+
+class PlayersFromQueryTest(unittest.TestCase):
+    def test_mojang_uses_slp_on_game_port(self):
+        meta = {"provider": "mojang", "port": 25565}
+        with patch("manager.minecraft_slp", return_value=(5, 20)) as slp:
+            self.assertEqual(players_from_query("minecraft", {"port": 25570}, meta), (5, 20))
+        slp.assert_called_once_with("127.0.0.1", 25570)
+
+    def test_steam_query_port_game_uses_a2s_on_query_port(self):
+        meta = {"provider": "steam", "port": 28015}
+        with patch("manager.steam_a2s_info", return_value=(2, 50)) as a2s:
+            self.assertEqual(players_from_query("rust", {"query_port": 28017}, meta), (2, 50))
+        a2s.assert_called_once_with("127.0.0.1", 28017)
+
+    def test_valheim_uses_a2s_on_port_plus_one(self):
+        meta = {"provider": "steam", "port": 2456}
+        with patch("manager.steam_a2s_info", return_value=(1, 10)) as a2s:
+            self.assertEqual(players_from_query("valheim", {"port": 2456}, meta), (1, 10))
+        a2s.assert_called_once_with("127.0.0.1", 2457)
+
+    def test_unknown_provider_returns_none(self):
+        self.assertIsNone(players_from_query("hytale", {"port": 5520}, {"provider": "hytale", "port": 5520}))
+
+    def test_missing_query_port_returns_none(self):
+        meta = {"provider": "steam", "port": 28015}
+        self.assertIsNone(players_from_query("rust", {}, meta))
 
 
 if __name__ == "__main__":

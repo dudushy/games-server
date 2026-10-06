@@ -107,9 +107,23 @@ jogadores online** do jogo ativo, sem afirmar que ele já aceita jogadores. Só 
 exibido o número agregado de jogadores — nunca nomes, IDs ou endereços. Para acesso
 público, siga [publicação do site](docs/site.md). Não há ações administrativas pelo site.
 
-A contagem de jogadores é lida do log do próprio jogo para servidores baseados em
-Unreal Engine (Smalland, Conan) e para Minecraft (Java vanilla e modpacks `mojang`,
-como os de [modpacks](docs/modpacks.md)). Nos demais jogos a coluna aparece como `—`.
+A contagem de jogadores usa a mesma forma das listas de servidores: uma **consulta
+de rede** ao próprio servidor (sempre em `127.0.0.1`), que também informa o total de
+slots. O site mostra o resultado no formato **online/máximo** (ex.: `0/10`, `20/100`).
+Minecraft (Java vanilla e modpacks `mojang`, como os de [modpacks](docs/modpacks.md))
+usa o *Server List Ping*; jogos Steam/Source (Valheim, Conan, Rust, Smalland) usam o
+*A2S_INFO*. A consulta lê apenas as contagens agregadas — nunca nomes, IDs ou endereços.
+
+Se a consulta de rede não responder (jogo ainda subindo, porta de query fechada), o
+site cai para a contagem por log do próprio jogo (Unreal: Smalland e Conan; Minecraft:
+`joined`/`left`); nesse caso o máximo aparece como desconhecido. Jogos sem consulta nem
+log de jogadores (ex.: Hytale) exibem `—`.
+
+Pelo TUI é possível **editar as settings do servidor** (opção "Editar settings"): abre o
+arquivo de configuração do jogo (Minecraft `server.properties`, Rust `server.cfg`, Conan
+`ServerSettings.ini`; jogos sem arquivo próprio editam o JSON do gerenciador) no `$EDITOR`.
+Se o jogo editado estiver ativo, o gerenciador avisa que **o servidor precisa reiniciar**
+para aplicar as mudanças e oferece reiniciar na hora (com salvamento e backup).
 
 O site tem um favicon próprio (`scripts/favicon.ico`): um joystick ao lado de um
 servidor. Ele é regenerável por `scripts/make_favicon.py` (veja
